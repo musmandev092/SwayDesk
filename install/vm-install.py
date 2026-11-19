@@ -11,6 +11,7 @@ import os, re, shutil, socket, subprocess, sys, time
 ISO = os.path.expanduser("~/VMs/fedora-iso/swaydesk-fedora45-vm.iso")
 VM = os.path.expanduser("~/VMs/test")
 OVMF = "/usr/share/edk2/ovmf"
+CPUS, MEM = os.environ.get("VM_CPUS", "8"), os.environ.get("VM_MEM", "16384")
 SER = f"{VM}/questions.sock"
 CON = f"{VM}/install-serial.log"
 
@@ -41,7 +42,7 @@ log = open(f"{VM}/questions.log", "wb")
 
 qemu = subprocess.Popen([
     "qemu-system-x86_64", "-name", "swaydesk-install", "-enable-kvm", "-machine", "q35",
-    "-cpu", "host", "-smp", "18", "-m", "32768",
+    "-cpu", "host", "-smp", CPUS, "-m", MEM,
     "-drive", f"if=pflash,format=raw,readonly=on,file={OVMF}/OVMF_CODE.fd",
     "-drive", f"if=pflash,format=raw,file={VM}/vars.fd",
     "-drive", f"file={VM}/disk.qcow2,if=virtio,format=qcow2",

@@ -80,7 +80,9 @@ Run the idempotent configuration orchestrator:
 
 ### VM Tests
 
-Inside the `iso` toolbox: `build-iso.sh`, then `vm-install.py` (answers the installer over serial), `vm-boot-test.py`, and `vm-run.py vm-firstboot-checks.sh` / `vm-checks.sh`. `vm-run.py vm-apply-test.sh --share ~/Projects/SwayDesk` reruns `apply.sh` to confirm a second run changes nothing.
+Inside the `iso` toolbox or WSL 2 with `/dev/kvm` (packages: `qemu-system-x86-core qemu-img edk2-ovmf lorax pykickstart xorriso`): `build-iso.sh`, then `vm-install.py` (answers the installer over serial), `vm-boot-test.py`, and `vm-run.py vm-firstboot-checks.sh` / `vm-checks.sh`. `vm-run.py vm-apply-test.sh --share ~/Projects/SwayDesk` reruns `apply.sh` to confirm a second run changes nothing.
+
+The test VM uses 8 CPUs and 16 GB RAM; override with `VM_CPUS` and `VM_MEM` (MiB). `vm-run.py` uses the Intel GPU render node for 3D when present (or `VM_RENDER`), otherwise plain `virtio-vga`.
 
 ---
 

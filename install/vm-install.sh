@@ -14,7 +14,7 @@ qemu-img create -q -f qcow2 "$VM/disk.qcow2" 60G
 cp "$OVMF/OVMF_VARS.fd" "$VM/vars.fd"
 
 exec qemu-system-x86_64 \
-    -name swaydesk-test -enable-kvm -machine q35 -cpu host -smp 18 -m 32768 \
+    -name swaydesk-test -enable-kvm -machine q35 -cpu host -smp "${VM_CPUS:-8}" -m "${VM_MEM:-16384}" \
     -drive if=pflash,format=raw,readonly=on,file="$OVMF/OVMF_CODE.fd" \
     -drive if=pflash,format=raw,file="$VM/vars.fd" \
     -drive file="$VM/disk.qcow2",if=virtio,format=qcow2 \

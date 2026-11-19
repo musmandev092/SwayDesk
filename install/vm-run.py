@@ -20,7 +20,12 @@ args = ap.parse_args()
 
 VM = os.path.expanduser("~/VMs/test")
 OVMF = "/usr/share/edk2/ovmf"
-RENDER = os.path.realpath("/dev/dri/by-path/pci-0000:00:02.0-render")
+CPUS, MEM = os.environ.get("VM_CPUS", "8"), os.environ.get("VM_MEM", "16384")
+RENDER = os.environ.get("VM_RENDER", "/dev/dri/by-path/pci-0000:00:02.0-render")
+if os.path.exists(RENDER):
+    GPU = ["-device", "virtio-vga-gl", "-display", f"egl-headless,rendernode={os.path.realpath(RENDER)}"]
+else:
+    GPU = ["-device", "virtio-vga", "-display", "none"]
 SER, MON = f"{VM}/serial.sock", f"{VM}/monitor.sock"
 LOG = open(f"{VM}/run-serial.log", "wb")
 for p in (SER, MON):
@@ -29,12 +34,12 @@ for p in (SER, MON):
 
 cmd = [
     "qemu-system-x86_64", "-name", "swaydesk-run", "-enable-kvm", "-machine", "q35",
-    "-cpu", "host", "-smp", "18", "-m", "32768",
+    "-cpu", "host", "-smp", CPUS, "-m", MEM,
     "-drive", f"if=pflash,format=raw,readonly=on,file={OVMF}/OVMF_CODE.fd",
     "-drive", f"if=pflash,format=raw,file={VM}/vars.fd",
     "-drive", f"file={VM}/disk.qcow2,if=virtio,format=qcow2",
     "-nic", "user,model=virtio-net-pci",
-    "-device", "virtio-vga-gl", "-display", f"egl-headless,rendernode={RENDER}",
+    *GPU,
     "-chardev", f"socket,id=s0,path={SER},server=on,wait=off", "-serial", "chardev:s0",
     "-monitor", f"unix:{MON},server,nowait",
 ]
