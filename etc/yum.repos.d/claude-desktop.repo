@@ -1,0 +1,5 @@
+[claude-desktop]
+name=Claude Desktop
+baseurl=https://musmandev092.github.io/claude-desktop-rpm/repo
+enabled=1
+gpgcheck=0
