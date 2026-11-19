@@ -1,4 +1,4 @@
-# Sway config for my_system: the Fedora Sway spin's key bindings (from sway-config-fedora 0.4.3),
+# Sway config for SwayDesk: the Fedora Sway spin's key bindings (from sway-config-fedora 0.4.3),
 # edited for DMS. DMS is the bar, launcher, lock and wallpaper, so the spin's rofi, waybar, swaylock and
 # swaybg parts are gone. Your own changes live in ~/.config/sway/config.d/.
 
