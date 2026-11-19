@@ -1,0 +1,14 @@
+{
+  "radiusMode": "fixed",
+  "fixedRadius": 1,
+  "reduceMotion": false,
+  "animationDuration": 100,
+  "popoutAnimationDuration": 80,
+  "modalAnimationDuration": 80,
+  "notificationAnimationDuration": 100,
+  "acLockTimeout": 300,
+  "batteryLockTimeout": 300,
+  "acMonitorTimeout": 600,
+  "batteryMonitorTimeout": 600,
+  "lockBeforeSuspend": true
+}
