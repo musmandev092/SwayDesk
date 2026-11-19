@@ -1,0 +1,10 @@
+[Unit]
+Description=SwayDesk: finish personal setup on first login
+ConditionPathExists=!%h/.local/state/swaydesk/firstrun.done
+
+[Service]
+Type=simple
+ExecStart=%h/Projects/SwayDesk/install/firstrun.sh
+
+[Install]
+WantedBy=default.target
