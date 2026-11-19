@@ -1,0 +1,8 @@
+target/
+__pycache__/
+*.bak
+*.bak.*
+*.log
+*.iso
+*.swp
+.lean
