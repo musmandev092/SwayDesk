@@ -1,0 +1,6 @@
+[config]
+
+[templates.sway]
+input_path = '~/.config/matugen/templates/sway-colors.conf'
+output_path = '~/.config/sway/dms-colors.conf'
+post_hook = 'sh -c "$HOME/.local/bin/sway-colors-apply"'

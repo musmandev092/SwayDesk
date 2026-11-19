@@ -1,0 +1,6 @@
+#!/bin/sh
+f="${XDG_CONFIG_HOME:-$HOME/.config}/sway/dms-colors.conf"
+[ -f "$f" ] && [ -n "$SWAYSOCK" ] || exit 0
+
+cmds=$(grep '^client\.' "$f" | paste -sd ';' -)
+[ -n "$cmds" ] && swaymsg "$cmds" >/dev/null 2>&1
