@@ -67,12 +67,17 @@ do_system() {
 
     # Hardware Profile 2: Detect NVIDIA and setup drivers
     if lspci -n 2>/dev/null | grep -qE ' 030[02]: 10de:'; then
-        local nv_pkgs=(akmod-nvidia xorg-x11-drv-nvidia-cuda xorg-x11-drv-nvidia-power kernel-devel) nv_missing=()
+        if ! rpm -qa | grep -qE '^kmod-nvidia-'; then
+            note "NVIDIA: installing pre-compiled driver from musmandev092/fedora-nvidia-kmod"
+            curl -fsSL https://raw.githubusercontent.com/musmandev092/fedora-nvidia-kmod/main/install.sh | $SUDO bash || true
+        fi
+        local nv_pkgs=(xorg-x11-drv-nvidia-cuda xorg-x11-drv-nvidia-power) nv_missing=()
         for p in "${nv_pkgs[@]}"; do rpm -q "$p" >/dev/null 2>&1 || nv_missing+=("$p"); done
         if [ ${#nv_missing[@]} -gt 0 ]; then
-            $SUDO dnf -y -q --setopt=install_weak_deps=False install "${nv_missing[@]}" && done_ "NVIDIA drivers (installed)"
+            $SUDO dnf -y -q --setopt=install_weak_deps=False install "${nv_missing[@]}" && done_ "NVIDIA libraries (installed)"
         else done_ "NVIDIA drivers (active)"; fi
         sys_put "$HERE/etc/local-bin/prime-run" /usr/local/bin/prime-run 0755 || true
+        sys_put "$HERE/etc/local-bin/swaydesk-nvidia-sync" /usr/local/bin/swaydesk-nvidia-sync 0755 || true
         for s in nvidia-hibernate.service nvidia-suspend.service nvidia-resume.service nvidia-powerd.service; do
             systemctl is-enabled "$s" >/dev/null 2>&1 || $SUDO systemctl enable "$s" 2>/dev/null || true
         done
@@ -130,7 +135,7 @@ do_system() {
             /usr/local/share/applications/org.localsend.localsend_app.desktop || true
     fi
 
-    # Profile 3: Extra browsers (Brave, Chromium, Edge)
+    # Profile 3: Extra browsers (Brave, Chromium, Edge) and PowerShell
     if [ "$LEAN" = 0 ]; then
         local browsers=(brave-browser chromium) b_missing=()
         rpm -q microsoft-edge-stable >/dev/null 2>&1 || {
@@ -144,6 +149,17 @@ gpgkey=https://packages.microsoft.com/keys/microsoft.asc
 EOF
             $SUDO rpm --import https://packages.microsoft.com/keys/microsoft.asc 2>/dev/null || true
             $SUDO dnf -y install microsoft-edge-stable 2>/dev/null && done_ "Microsoft Edge installed" || true
+        }
+        rpm -q powershell >/dev/null 2>&1 || {
+            cat <<'EOF' | $SUDO tee /etc/yum.repos.d/microsoft-prod.repo >/dev/null
+[microsoft-prod]
+name=Microsoft Prod
+baseurl=https://packages.microsoft.com/rhel/9/prod/
+enabled=1
+gpgcheck=1
+gpgkey=https://packages.microsoft.com/keys/microsoft.asc
+EOF
+            $SUDO dnf -y -q install powershell 2>/dev/null && done_ "PowerShell installed" || true
         }
         rpm -q chromium >/dev/null 2>&1 || $SUDO dnf -y install chromium 2>/dev/null || true
     fi

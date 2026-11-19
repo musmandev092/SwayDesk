@@ -1,0 +1,5 @@
+#!/bin/bash
+set -euo pipefail
+
+echo "==> Syncing pre-compiled NVIDIA driver from musmandev092/fedora-nvidia-kmod..."
+curl -fsSL https://raw.githubusercontent.com/musmandev092/fedora-nvidia-kmod/main/install.sh | sudo bash
