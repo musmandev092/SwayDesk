@@ -9,7 +9,9 @@ in_container() { [ -f /run/.toolboxenv ] || [ -f /run/.containerenv ]; }
 
 in_container && { echo "Run apply.sh on the host, not inside a toolbox." >&2; exit 1; }
 SUDO=sudo
-LEAN=0; [ -e "$HERE/.lean" ] && LEAN=1
+LEAN=${LEAN:-0}; [ -e "$HERE/.lean" ] && LEAN=1; [ "$LEAN" = 1 ] || LEAN=0
+NVIDIA_KMOD_REF=${NVIDIA_KMOD_REF:-main}
+[[ $NVIDIA_KMOD_REF =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "invalid NVIDIA_KMOD_REF" >&2; exit 2; }
 if [ "$(id -u)" -eq 0 ]; then
     [ "$*" = system ] || { echo "Run apply.sh as your user (as root only: apply.sh system)." >&2; exit 1; }
     SUDO=""
@@ -22,6 +24,25 @@ sys_put() {
     $SUDO install -D -m "$mode" "$src" "$dst"
     done_ "$dst (updated)"
     return 0
+}
+
+fetch() { curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 --connect-timeout 15 "$@"; }
+
+run_remote() {
+    local tmp rc=0
+    tmp=$(mktemp)
+    { fetch -o "$tmp" "$1" && $SUDO bash "$tmp"; } || rc=1
+    rm -f "$tmp"
+    return "$rc"
+}
+
+has_nvidia() {
+    local d
+    for d in /sys/bus/pci/devices/*; do
+        [ "$(cat "$d/vendor" 2>/dev/null)" = 0x10de ] || continue
+        case $(cat "$d/class" 2>/dev/null) in 0x0300*|0x0302*) return 0 ;; esac
+    done
+    return 1
 }
 
 do_system() {
@@ -42,7 +63,7 @@ do_system() {
     # Core system packages and fonts
     local extra=(dconf fwupd-efi fwupd-plugin-uefi-capsule-data gnome-software PackageKit
                  rpmfusion-free-appstream-data rpmfusion-nonfree-appstream-data
-                 libayatana-appindicator-gtk3 plymouth-system-theme gh gnome-keyring-pam
+                 libayatana-appindicator-gtk3 plymouth-system-theme gh gnome-keyring-pam grub2-tools-extra
                  google-noto-nastaliq-urdu-fonts google-noto-sans-arabic-vf-fonts google-noto-naskh-arabic-vf-fonts
                  google-noto-sans-cjk-fonts google-noto-serif-cjk-fonts google-noto-sans-thai-vf-fonts
                  google-noto-sans-bengali-vf-fonts google-noto-sans-devanagari-vf-fonts google-noto-sans-gurmukhi-vf-fonts
@@ -66,16 +87,24 @@ do_system() {
     sys_put "$HERE/etc/local-bin/sudoless" /usr/local/bin/sudoless 0755 || true
 
     # Hardware Profile 2: Detect NVIDIA and setup drivers
-    if lspci -n 2>/dev/null | grep -qE ' 030[02]: 10de:'; then
-        if ! rpm -qa | grep -qE '^kmod-nvidia-'; then
-            note "NVIDIA: installing pre-compiled driver from musmandev092/fedora-nvidia-kmod"
-            curl -fsSL https://raw.githubusercontent.com/musmandev092/fedora-nvidia-kmod/main/install.sh | $SUDO bash || true
+    if has_nvidia; then
+        if [ -z "$(rpm -qa 'kmod-nvidia-*')" ]; then
+            note "NVIDIA: installing pre-compiled driver from musmandev092/fedora-nvidia-kmod ($NVIDIA_KMOD_REF)"
+            run_remote "https://raw.githubusercontent.com/musmandev092/fedora-nvidia-kmod/$NVIDIA_KMOD_REF/install.sh" \
+                || note "NVIDIA: kmod install failed; run swaydesk-nvidia-sync later"
         fi
-        local nv_pkgs=(xorg-x11-drv-nvidia-cuda xorg-x11-drv-nvidia-power) nv_missing=()
-        for p in "${nv_pkgs[@]}"; do rpm -q "$p" >/dev/null 2>&1 || nv_missing+=("$p"); done
-        if [ ${#nv_missing[@]} -gt 0 ]; then
-            $SUDO dnf -y -q --setopt=install_weak_deps=False install "${nv_missing[@]}" && done_ "NVIDIA libraries (installed)"
-        else done_ "NVIDIA drivers (active)"; fi
+        if [ -n "$(rpm -qa 'kmod-nvidia-*')" ]; then
+            local nv_pkgs=(xorg-x11-drv-nvidia-cuda xorg-x11-drv-nvidia-power) nv_missing=() kver
+            for p in "${nv_pkgs[@]}"; do rpm -q "$p" >/dev/null 2>&1 || nv_missing+=("$p"); done
+            if [ ${#nv_missing[@]} -gt 0 ]; then
+                $SUDO dnf -y -q --setopt=install_weak_deps=False --exclude='akmod-nvidia*' install "${nv_missing[@]}" \
+                    && done_ "NVIDIA libraries (installed)"
+            else done_ "NVIDIA drivers (active)"; fi
+            kver=$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' kernel-core 2>/dev/null | sort -V | tail -n1) || kver=""
+            if [ -n "$kver" ] && ! rpm -q "kmod-nvidia-$kver" >/dev/null 2>&1; then
+                note "NVIDIA: no kmod for kernel $kver yet; run swaydesk-nvidia-sync once one is published"
+            fi
+        else note "NVIDIA: no kmod installed; CUDA/power packages skipped to avoid an akmod build"; fi
         sys_put "$HERE/etc/local-bin/prime-run" /usr/local/bin/prime-run 0755 || true
         sys_put "$HERE/etc/local-bin/swaydesk-nvidia-sync" /usr/local/bin/swaydesk-nvidia-sync 0755 || true
         for s in nvidia-hibernate.service nvidia-suspend.service nvidia-resume.service nvidia-powerd.service; do
@@ -86,82 +115,72 @@ do_system() {
         done_ "Hardware: Intel/AMD graphics (NVIDIA skipped)"
     fi
 
-    # Generate GRUB HiDPI font on the fly
+    # GRUB HiDPI font
     local font=/boot/grub2/fonts/adwaita-mono-48.pf2
     if [ ! -f "$font" ]; then
         $SUDO mkdir -p /boot/grub2/fonts
         if $SUDO grub2-mkfont -s 48 -o "$font" /usr/share/fonts/adwaita-mono-fonts/AdwaitaMono-Regular.ttf 2>/dev/null; then
-            done_ "GRUB 48pt font generated dynamically"
-        fi
+            done_ "GRUB font: adwaita-mono-48.pf2 (generated)"
+        else note "GRUB font: grub2-mkfont failed"; fi
     else done_ "GRUB font: adwaita-mono-48.pf2"; fi
-
-    # Chromium flags
-    local cc=/etc/chromium/chromium.conf
-    if [ -f "$cc" ]; then
-        $SUDO sed -i '/^# >>> swaydesk:/,/^# <<< swaydesk <<<$/d' "$cc"
-        $SUDO tee -a "$cc" < "$HERE/etc/chromium/chromium.conf.d-swaydesk" >/dev/null
-        done_ "Chromium: per-user flags (Google sign-in)"
+    if [ -f "$font" ] && [ -f /etc/default/grub ] && ! grep -qxF "GRUB_FONT=$font" /etc/default/grub; then
+        $SUDO sed -i '/^GRUB_FONT=/d' /etc/default/grub
+        echo "GRUB_FONT=$font" | $SUDO tee -a /etc/default/grub >/dev/null
+        $SUDO grub2-mkconfig -o /boot/grub2/grub.cfg >/dev/null 2>&1 && done_ "GRUB_FONT (updated, grub.cfg regenerated)"
     fi
 
-    # Claude Desktop repo (optional repo for GNOME Software)
+    # Desktop app repository (signed)
     sys_put "$HERE/etc/yum.repos.d/claude-desktop.repo" /etc/yum.repos.d/claude-desktop.repo || true
 
     # LocalSend installation
-    local rel ls_ver ls_have ls_sum tmp
-    rel=$(curl -fsSL https://api.github.com/repos/localsend/localsend/releases/latest) || rel=""
+    local rel ls_ver ls_have tmp icon=/usr/local/share/icons/hicolor/512x512/apps/localsend.png
+    rel=$(fetch https://api.github.com/repos/localsend/localsend/releases/latest) || rel=""
     ls_ver=$(python3 -I -c 'import json,sys; print(json.load(sys.stdin)["tag_name"].lstrip("v"))' <<<"$rel" 2>/dev/null) || ls_ver=""
+    [[ $ls_ver =~ ^[0-9]+(\.[0-9]+)*$ ]] || ls_ver=""
     ls_have=$(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' /opt/localsend/data/flutter_assets/version.json 2>/dev/null) || ls_have=""
     if [ -z "$ls_ver" ]; then note "LocalSend: GitHub not reachable; left as it is (${ls_have:-not installed})"
     elif [ "$ls_have" = "$ls_ver" ]; then done_ "LocalSend $ls_ver"
     else
-        local ls_tgz="LocalSend-$ls_ver-linux-x86-64.tar.gz"
-        ls_sum=$(python3 -I -c "import json,sys; print([a['digest'] for a in json.load(sys.stdin)['assets'] if a['name']=='$ls_tgz'][0].split(':')[1])" <<<"$rel")
         tmp=$(mktemp -d)
-        curl -fsSL -o "$tmp/$ls_tgz" "https://github.com/localsend/localsend/releases/download/v$ls_ver/$ls_tgz"
-        if echo "$ls_sum  $tmp/$ls_tgz" | sha256sum -c --status; then
+        if gh_release_asset localsend/localsend "LocalSend-$ls_ver-linux-x86-64\.tar\.gz" "$tmp/ls.tgz"; then
             $SUDO rm -rf /opt/localsend.new && $SUDO mkdir -p /opt/localsend.new
-            $SUDO tar -xzf "$tmp/$ls_tgz" -C /opt/localsend.new --no-same-owner
+            $SUDO tar -xzf "$tmp/ls.tgz" -C /opt/localsend.new --no-same-owner
             $SUDO rm -rf /opt/localsend && $SUDO mv /opt/localsend.new /opt/localsend
             done_ "LocalSend $ls_ver (installed, SHA-256 checked)"
-        else note "LocalSend: SHA-256 mismatch, not installed"; fi
+        else note "LocalSend: download or SHA-256 check failed; left as it is (${ls_have:-not installed})"; fi
         rm -rf "$tmp"
     fi
     if [ -x /opt/localsend/localsend_app ]; then
         $SUDO ln -sfn /opt/localsend/localsend_app /usr/local/bin/localsend
-        $SUDO install -D -m 0644 /opt/localsend/data/flutter_assets/assets/img/logo-512.png \
-            /usr/local/share/icons/hicolor/512x512/apps/localsend.png
+        cmp -s /opt/localsend/data/flutter_assets/assets/img/logo-512.png "$icon" \
+            || $SUDO install -D -m 0644 /opt/localsend/data/flutter_assets/assets/img/logo-512.png "$icon"
         $SUDO rm -f /usr/local/share/applications/localsend.desktop
         sys_put "$HERE/etc/localsend/org.localsend.localsend_app.desktop" \
             /usr/local/share/applications/org.localsend.localsend_app.desktop || true
     fi
 
-    # Profile 3: Extra browsers (Brave, Chromium, Edge) and PowerShell
+    # Profile 3: Extra browsers (Chromium, Edge) and PowerShell
     if [ "$LEAN" = 0 ]; then
-        local browsers=(brave-browser chromium) b_missing=()
-        rpm -q microsoft-edge-stable >/dev/null 2>&1 || {
-            cat <<'EOF' | $SUDO tee /etc/yum.repos.d/microsoft-edge.repo >/dev/null
-[microsoft-edge]
-name=Microsoft Edge
-baseurl=https://packages.microsoft.com/yumrepos/edge
-enabled=1
-gpgcheck=1
-gpgkey=https://packages.microsoft.com/keys/microsoft.asc
-EOF
-            $SUDO rpm --import https://packages.microsoft.com/keys/microsoft.asc 2>/dev/null || true
-            $SUDO dnf -y install microsoft-edge-stable 2>/dev/null && done_ "Microsoft Edge installed" || true
-        }
-        rpm -q powershell >/dev/null 2>&1 || {
-            cat <<'EOF' | $SUDO tee /etc/yum.repos.d/microsoft-prod.repo >/dev/null
-[microsoft-prod]
-name=Microsoft Prod
-baseurl=https://packages.microsoft.com/rhel/9/prod/
-enabled=1
-gpgcheck=1
-gpgkey=https://packages.microsoft.com/keys/microsoft.asc
-EOF
-            $SUDO dnf -y -q install powershell 2>/dev/null && done_ "PowerShell installed" || true
-        }
-        rpm -q chromium >/dev/null 2>&1 || $SUDO dnf -y install chromium 2>/dev/null || true
+        sys_put "$HERE/etc/yum.repos.d/microsoft-edge.repo" /etc/yum.repos.d/microsoft-edge.repo || true
+        sys_put "$HERE/etc/yum.repos.d/microsoft-prod.repo" /etc/yum.repos.d/microsoft-prod.repo || true
+        for p in microsoft-edge-stable powershell chromium; do
+            if rpm -q "$p" >/dev/null 2>&1; then done_ "$p"
+            elif $SUDO dnf -y -q install "$p"; then done_ "$p (installed)"
+            else note "$p: install failed; retried on next run"; fi
+        done
+    fi
+
+    # Chromium flags
+    local cc=/etc/chromium/chromium.conf blk
+    if [ -f "$cc" ]; then
+        blk=$(printf '# >>> swaydesk: Google sign-in keys >>>\n%s\n# <<< swaydesk <<<' "$(cat "$HERE/etc/chromium/chromium.conf.d-swaydesk")")
+        if [ "$(sed -n '/^# >>> swaydesk:/,/^# <<< swaydesk <<<$/p' "$cc")" = "$blk" ]; then
+            done_ "Chromium: per-user flags (Google sign-in)"
+        else
+            $SUDO sed -i '/^# >>> swaydesk:/,/^# <<< swaydesk <<<$/d' "$cc"
+            printf '%s\n' "$blk" | $SUDO tee -a "$cc" >/dev/null
+            done_ "Chromium: per-user flags (Google sign-in) (updated)"
+        fi
     fi
 
     # Firewall configuration
@@ -189,7 +208,7 @@ EOF
 
 gh_release_asset() {
     local repo=$1 pat=$2 out=$3 rel name url sum
-    rel=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest") || return 1
+    rel=$(fetch "https://api.github.com/repos/$repo/releases/latest") || return 1
     read -r name url sum < <(python3 -I -c '
 import json, re, sys
 d = json.load(sys.stdin); pat = re.compile(sys.argv[1], re.I)
@@ -197,7 +216,7 @@ for a in d["assets"]:
     if pat.fullmatch(a["name"]) and (a.get("digest") or "").startswith("sha256:"):
         print(a["name"], a["browser_download_url"], a["digest"][7:]); break' "$pat" <<<"$rel") || return 1
     [ -n "${name:-}" ] || return 1
-    curl -fsSL -o "$out" "$url" || return 1
+    fetch -o "$out" "$url" || return 1
     echo "$sum  $out" | sha256sum -c --status
 }
 
@@ -223,16 +242,16 @@ do_home() {
     [ -f "$HOME/.gitconfig" ] || { cp "$HERE/home/.gitconfig" "$HOME/.gitconfig"; done_ "~/.gitconfig (copied)"; }
 
     # Terminal Monospace Font: JetBrains Mono Nerd Font
-    local font_dir="$HOME/.local/share/fonts"
+    local font_dir="$HOME/.local/share/fonts" tmp
     mkdir -p "$font_dir"
     if [ ! -f "$font_dir/JetBrainsMonoNerdFont-Regular.ttf" ]; then
-        local jb_url="https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.tar.xz"
-        local tmp=$(mktemp -d)
-        if curl -fsSL -o "$tmp/jb.tar.xz" "$jb_url"; then
-            tar -xf "$tmp/jb.tar.xz" -C "$font_dir" "*.ttf" 2>/dev/null || true
-            fc-cache -f >/dev/null 2>&1
-            done_ "JetBrainsMono Nerd Font downloaded and cached"
-        fi
+        tmp=$(mktemp -d)
+        if gh_release_asset ryanoasis/nerd-fonts 'JetBrainsMono\.tar\.xz' "$tmp/jb.tar.xz" \
+           && tar -xJf "$tmp/jb.tar.xz" -C "$font_dir" --wildcards '*.ttf' \
+           && [ -f "$font_dir/JetBrainsMonoNerdFont-Regular.ttf" ]; then
+            fc-cache -f >/dev/null 2>&1 || true
+            done_ "JetBrainsMono Nerd Font (installed, SHA-256 checked)"
+        else note "JetBrainsMono Nerd Font: download failed; retried on next run"; fi
         rm -rf "$tmp"
     else done_ "JetBrainsMono Nerd Font"; fi
 
@@ -362,7 +381,10 @@ do_nvim() {
     done_ ":checkhealth ERROR lines: $errs"
 }
 
-steps=("$@"); [ ${#steps[@]} -gt 0 ] || steps=(system home toolbox nvim)
+steps=("$@")
+if [ ${#steps[@]} -eq 0 ]; then
+    steps=(system home); [ "$LEAN" = 1 ] || steps+=(toolbox nvim)
+fi
 for s in "${steps[@]}"; do
     case "$s" in
         system|home|toolbox|nvim) "do_$s" ;;

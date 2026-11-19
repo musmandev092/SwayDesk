@@ -2,4 +2,8 @@
 name=Claude Desktop
 baseurl=https://musmandev092.github.io/claude-desktop-rpm/repo
 enabled=1
-gpgcheck=0
+type=rpm
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=https://musmandev092.github.io/claude-desktop-rpm/RPM-GPG-KEY-claude-desktop-rpm.asc
+metadata_expire=1h

@@ -1,5 +1,6 @@
 #!/bin/bash
 set -u
+repo="$HOME/Projects/SwayDesk"
 state="$HOME/.local/state/swaydesk"
 log="$state/firstrun.log"
 mkdir -p "$state"
@@ -11,12 +12,12 @@ for _ in $(seq 120); do
 done
 sleep 15
 
-steps="home toolbox nvim"
-[ -e "$HOME/Projects/SwayDesk/.lean" ] && steps="home"
-notify "Setting up SwayDesk" "Personal tools ($steps): a few minutes. You can keep working."
-if "$HOME/Projects/SwayDesk/apply.sh" $steps > "$log" 2>&1; then
+steps=(home toolbox nvim)
+[ -e "$repo/.lean" ] && steps=(home)
+notify "Setting up SwayDesk" "Personal tools (${steps[*]}): a few minutes. You can keep working."
+if "$repo/apply.sh" "${steps[@]}" > "$log" 2>&1; then
     touch "$state/firstrun.done"
     notify "SwayDesk is ready" "Everything is set up. Log: $log"
 else
-    notify -u critical "Setup did not finish" "See $log. Retry at next login or run ~/Projects/SwayDesk/apply.sh"
+    notify -u critical "Setup did not finish" "See $log. Retry at next login or run $repo/apply.sh"
 fi

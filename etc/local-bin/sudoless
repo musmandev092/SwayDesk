@@ -46,12 +46,11 @@ publish() {
 enable() {
     local minutes=$1 expires deadline
     [[ $user =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "run it as your user (through sudo), not as root"
-    if [[ -t 0 ]]; then
-        echo "WARNING: any program running as $user can run ANY command as root without a password"
-        [[ $minutes == permanent ]] && echo "until you run 'sudoless off'." || echo "for the next $minutes minutes."
-        read -r -p "Type yes to enable: " ans
-        [[ $ans == yes ]] || { echo "Aborted; nothing changed."; exit 1; }
-    fi
+    [[ -t 0 ]] || die "'on' needs a terminal to confirm"
+    echo "WARNING: any program running as $user can run ANY command as root without a password"
+    if [[ $minutes == permanent ]]; then echo "until you run 'sudoless off'."; else echo "for the next $minutes minutes."; fi
+    read -r -p "Type yes to enable: " ans
+    [[ $ans == yes ]] || { echo "Aborted; nothing changed."; exit 1; }
     if [[ $minutes == permanent ]]; then
         publish "$user ALL=(ALL) NOPASSWD: ALL" "$PERM"
         rm -f -- "$TIMED"; stop_timers

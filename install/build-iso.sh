@@ -21,7 +21,7 @@ LEAN=0; [ "${1:-}" = lean ] && LEAN=1
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 rsync -a --exclude='target/' --exclude='.git/' --exclude='__pycache__/' --exclude='*.log' \
-      --exclude='*.bak' --exclude='*.bak.*' "$HERE/../" "$STAGE/SwayDesk/"
+      --exclude='*.bak' --exclude='*.bak.*' --exclude='/.lean' "$HERE/../" "$STAGE/SwayDesk/"
 
 if [ "$LEAN" = 1 ]; then
     touch "$STAGE/SwayDesk/.lean"

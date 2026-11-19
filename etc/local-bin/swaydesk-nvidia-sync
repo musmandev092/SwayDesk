@@ -1,5 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 
-echo "==> Syncing pre-compiled NVIDIA driver from musmandev092/fedora-nvidia-kmod..."
-curl -fsSL https://raw.githubusercontent.com/musmandev092/fedora-nvidia-kmod/main/install.sh | sudo bash
+ref=${NVIDIA_KMOD_REF:-main}
+[[ $ref =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "invalid NVIDIA_KMOD_REF" >&2; exit 2; }
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+
+echo "==> Syncing pre-compiled NVIDIA driver from musmandev092/fedora-nvidia-kmod ($ref)..."
+curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 15 -o "$tmp" \
+    "https://raw.githubusercontent.com/musmandev092/fedora-nvidia-kmod/$ref/install.sh"
+sudo bash "$tmp"
