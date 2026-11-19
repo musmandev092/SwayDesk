@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install my_system-fedora44-vm.iso into a fresh UEFI VM, answering the
+"""Install swaydesk-fedora45-vm.iso into a fresh UEFI VM, answering the
 installer's questions over the serial console like a person would.
 Test answers: computer vmtest, user test / test, disk password = account password (test).
 
@@ -8,7 +8,7 @@ Runs in the `iso` toolbox:  python3 vm-install.py [--questions-only]
 """
 import os, re, shutil, socket, subprocess, sys, time
 
-ISO = os.path.expanduser("~/VMs/fedora-iso/my_system-fedora44-vm.iso")
+ISO = os.path.expanduser("~/VMs/fedora-iso/swaydesk-fedora45-vm.iso")
 VM = os.path.expanduser("~/VMs/test")
 OVMF = "/usr/share/edk2/ovmf"
 SER = f"{VM}/questions.sock"
@@ -22,7 +22,7 @@ ANSWERS = [
     (r"  Password: ", "test"),
     (r"  Password \(again\): ", "test"),
     (r"same password as your account\? \[", "y"),
-    (r"Install on disk number \[", ""),
+    (r"Install on disk number", "1"),
     (r"Type WIPE to erase /dev/[a-z0-9]+: ", "WIPE"),
     (r"Install now\? \(yes/no\): ", "yes"),
 ]
@@ -40,7 +40,7 @@ shutil.copy(f"{OVMF}/OVMF_VARS.fd", f"{VM}/vars.fd")
 log = open(f"{VM}/questions.log", "wb")
 
 qemu = subprocess.Popen([
-    "qemu-system-x86_64", "-name", "my_system-install", "-enable-kvm", "-machine", "q35",
+    "qemu-system-x86_64", "-name", "swaydesk-install", "-enable-kvm", "-machine", "q35",
     "-cpu", "host", "-smp", "18", "-m", "32768",
     "-drive", f"if=pflash,format=raw,readonly=on,file={OVMF}/OVMF_CODE.fd",
     "-drive", f"if=pflash,format=raw,file={VM}/vars.fd",

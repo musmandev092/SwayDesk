@@ -10,8 +10,7 @@ in_container() { [ -f /run/.toolboxenv ] || [ -f /run/.containerenv ]; }
 in_container && { echo "Run apply.sh on the host, not inside a toolbox." >&2; exit 1; }
 SUDO=sudo
 LEAN=${LEAN:-0}; [ -e "$HERE/.lean" ] && LEAN=1; [ "$LEAN" = 1 ] || LEAN=0
-NVIDIA_KMOD_REF=${NVIDIA_KMOD_REF:-main}
-[[ $NVIDIA_KMOD_REF =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "invalid NVIDIA_KMOD_REF" >&2; exit 2; }
+FW=() FW_CHANGED=0
 if [ "$(id -u)" -eq 0 ]; then
     [ "$*" = system ] || { echo "Run apply.sh as your user (as root only: apply.sh system)." >&2; exit 1; }
     SUDO=""
@@ -28,12 +27,15 @@ sys_put() {
 
 fetch() { curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 --connect-timeout 15 "$@"; }
 
-run_remote() {
-    local tmp rc=0
-    tmp=$(mktemp)
-    { fetch -o "$tmp" "$1" && $SUDO bash "$tmp"; } || rc=1
-    rm -f "$tmp"
-    return "$rc"
+fw_set() {
+    local op=$1 kind=$2 val=$3 has=0
+    $SUDO "${FW[@]}" "--query-$kind=$val" >/dev/null 2>&1 && has=1
+    if [ "$op" = add ] && [ "$has" = 0 ]; then
+        $SUDO "${FW[@]}" "--add-$kind=$val" >/dev/null && FW_CHANGED=1
+    elif [ "$op" = remove ] && [ "$has" = 1 ]; then
+        $SUDO "${FW[@]}" "--remove-$kind=$val" >/dev/null && FW_CHANGED=1
+    fi
+    return 0
 }
 
 has_nvidia() {
@@ -88,23 +90,8 @@ do_system() {
 
     # Hardware Profile 2: Detect NVIDIA and setup drivers
     if has_nvidia; then
-        if [ -z "$(rpm -qa 'kmod-nvidia-*')" ]; then
-            note "NVIDIA: installing pre-compiled driver from musmandev092/fedora-nvidia-kmod ($NVIDIA_KMOD_REF)"
-            run_remote "https://raw.githubusercontent.com/musmandev092/fedora-nvidia-kmod/$NVIDIA_KMOD_REF/install.sh" \
-                || note "NVIDIA: kmod install failed; run swaydesk-nvidia-sync later"
-        fi
-        if [ -n "$(rpm -qa 'kmod-nvidia-*')" ]; then
-            local nv_pkgs=(xorg-x11-drv-nvidia-cuda xorg-x11-drv-nvidia-power) nv_missing=() kver
-            for p in "${nv_pkgs[@]}"; do rpm -q "$p" >/dev/null 2>&1 || nv_missing+=("$p"); done
-            if [ ${#nv_missing[@]} -gt 0 ]; then
-                $SUDO dnf -y -q --setopt=install_weak_deps=False --exclude='akmod-nvidia*' install "${nv_missing[@]}" \
-                    && done_ "NVIDIA libraries (installed)"
-            else done_ "NVIDIA drivers (active)"; fi
-            kver=$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' kernel-core 2>/dev/null | sort -V | tail -n1) || kver=""
-            if [ -n "$kver" ] && ! rpm -q "kmod-nvidia-$kver" >/dev/null 2>&1; then
-                note "NVIDIA: no kmod for kernel $kver yet; run swaydesk-nvidia-sync once one is published"
-            fi
-        else note "NVIDIA: no kmod installed; CUDA/power packages skipped to avoid an akmod build"; fi
+        if bash "$HERE/etc/local-bin/swaydesk-nvidia-sync"; then done_ "NVIDIA driver (kmod matches newest kernel)"
+        else note "NVIDIA: driver not installed for the newest kernel; run swaydesk-nvidia-sync later"; fi
         sys_put "$HERE/etc/local-bin/prime-run" /usr/local/bin/prime-run 0755 || true
         sys_put "$HERE/etc/local-bin/swaydesk-nvidia-sync" /usr/local/bin/swaydesk-nvidia-sync 0755 || true
         for s in nvidia-hibernate.service nvidia-suspend.service nvidia-resume.service nvidia-powerd.service; do
@@ -163,7 +150,7 @@ do_system() {
     if [ "$LEAN" = 0 ]; then
         sys_put "$HERE/etc/yum.repos.d/microsoft-edge.repo" /etc/yum.repos.d/microsoft-edge.repo || true
         sys_put "$HERE/etc/yum.repos.d/microsoft-prod.repo" /etc/yum.repos.d/microsoft-prod.repo || true
-        for p in microsoft-edge-stable powershell chromium; do
+        for p in microsoft-edge-stable powershell chromium toolbox; do
             if rpm -q "$p" >/dev/null 2>&1; then done_ "$p"
             elif $SUDO dnf -y -q install "$p"; then done_ "$p (installed)"
             else note "$p: install failed; retried on next run"; fi
@@ -183,27 +170,27 @@ do_system() {
         fi
     fi
 
-    # Firewall configuration
-    local fw_changed=0 r fw=(firewall-cmd --permanent)
-    $SUDO firewall-cmd --state >/dev/null 2>&1 || fw=(firewall-offline-cmd)
-    if $SUDO "${fw[@]}" --query-service=ssh >/dev/null 2>&1; then
-        $SUDO "${fw[@]}" --remove-service=ssh >/dev/null && fw_changed=1
+    # SSH: key-only; port opened only when .sshd exists
+    if sys_put "$HERE/etc/ssh/sshd_config.d/40-swaydesk.conf" /etc/ssh/sshd_config.d/40-swaydesk.conf 0600 \
+       && systemctl is-active -q sshd 2>/dev/null; then
+        $SUDO sshd -t && $SUDO systemctl reload sshd && done_ "sshd reloaded (key-only)"
     fi
-    r='rule service name="ssh" accept limit value="6/m"'
-    $SUDO "${fw[@]}" --query-rich-rule="$r" >/dev/null 2>&1 \
-        || { $SUDO "${fw[@]}" --add-rich-rule="$r" >/dev/null && fw_changed=1; }
-    for r in http https; do
-        $SUDO "${fw[@]}" --query-service=$r >/dev/null 2>&1 \
-            || { $SUDO "${fw[@]}" --add-service=$r >/dev/null && fw_changed=1; }
-    done
-    for r in 53317/tcp 53317/udp; do
-        $SUDO "${fw[@]}" --query-port=$r >/dev/null 2>&1 \
-            || { $SUDO "${fw[@]}" --add-port=$r >/dev/null && fw_changed=1; }
-    done
-    if [ "$fw_changed" = 1 ]; then
-        [ "${fw[0]}" = firewall-cmd ] && $SUDO firewall-cmd --reload >/dev/null
+
+    # Firewall: LocalSend open, no web ports
+    FW=(firewall-cmd --permanent); FW_CHANGED=0
+    $SUDO firewall-cmd --state >/dev/null 2>&1 || FW=(firewall-offline-cmd)
+    fw_set remove service http
+    fw_set remove service https
+    fw_set remove rich-rule 'rule service name="ssh" accept limit value="6/m"'
+    fw_set add port 53317/tcp
+    fw_set add port 53317/udp
+    if [ -e "$HERE/.sshd" ]; then fw_set add service ssh; else fw_set remove service ssh; fi
+    if [ "$FW_CHANGED" = 1 ]; then
+        [ "${FW[0]}" = firewall-cmd ] && $SUDO firewall-cmd --reload >/dev/null
         done_ "firewall rules (updated)"
     else done_ "firewall rules"; fi
+    if [ -e "$HERE/.sshd" ]; then done_ "firewall: LocalSend 53317 open, SSH open (key-only)"
+    else done_ "firewall: LocalSend 53317 open, SSH closed"; fi
 }
 
 gh_release_asset() {

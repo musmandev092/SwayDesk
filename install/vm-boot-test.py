@@ -2,8 +2,8 @@
 """Boot the installed test VM, unlock LUKS, log in on the serial console,
 run checks, save a screenshot of the login screen, then power off.
 
-Runs in the `iso` toolbox:  python3 ~/Projects/my_system/install/vm-boot-test.py
-Test values only (from ks.cfg's VM branch): LUKS "vmtest-luks", user test/test.
+Runs in the `iso` toolbox:  python3 ~/Projects/SwayDesk/install/vm-boot-test.py
+Test values only (from vm-install.py): LUKS "test", user test/test.
 """
 import os, re, socket, subprocess, sys, time
 
@@ -18,7 +18,7 @@ for p in (SER, MON):
         os.unlink(p)
 
 qemu = subprocess.Popen([
-    "qemu-system-x86_64", "-name", "my_system-boot", "-enable-kvm", "-machine", "q35",
+    "qemu-system-x86_64", "-name", "swaydesk-boot", "-enable-kvm", "-machine", "q35",
     "-cpu", "host", "-smp", "18", "-m", "32768",
     "-drive", f"if=pflash,format=raw,readonly=on,file={OVMF}/OVMF_CODE.fd",
     "-drive", f"if=pflash,format=raw,file={VM}/vars.fd",
@@ -78,7 +78,7 @@ try:
     print("booting; waiting for the disk passphrase prompt ...", flush=True)
     wait_for(r"[Pp]assphrase", 300)
     time.sleep(1)
-    send("vmtest-luks\r")
+    send("test\r")
     print("passphrase sent; waiting for the login prompt ...", flush=True)
     wait_for(r"login: ", 300)
     time.sleep(45)
@@ -88,17 +88,16 @@ try:
     checks = r"""
 printf '==%s==\n' BEGIN
 echo "## kernel:"; uname -r
-echo "## installed:"; rpm -q sway dms dms-greeter greetd claude-desktop brave-origin toolbox nvidia-kmod-control nautilus sushi ptyxis cups | sed 's/^/  /'
+echo "## installed:"; rpm -q sway dms dms-greeter greetd brave-origin chromium microsoft-edge-stable powershell toolbox nautilus sushi ptyxis cups | sed 's/^/  /'
 echo "## packages total: $(rpm -qa | wc -l)"
 echo "## boot target: $(systemctl get-default)"
 echo "## greetd: $(systemctl is-enabled greetd) / $(systemctl is-active greetd)"
 echo "## sway: $(sway --version 2>/dev/null)"
 echo "## disk:"; lsblk -o NAME,FSTYPE,MOUNTPOINTS | sed 's/^/  /'
-echo "## claude-desktop-verify:"; claude-desktop-verify 2>&1 | tail -1
 echo "## repos:"; ls /etc/yum.repos.d/ | sed 's/^/  /'
+echo "## firewall:"; echo test | sudo -S firewall-cmd --list-all 2>/dev/null | grep -E 'services|ports|rich' | sed 's/^/  /'
 echo "## kickstart post log end:"; echo test | sudo -S tail -3 /root/ks-post.log 2>/dev/null | sed 's/^/  /'
 echo "## ks-done:"; echo test | sudo -S cat /root/ks-done 2>/dev/null
-echo "## unsigned packages:"; echo test | sudo -S cat /root/unsigned-packages.txt 2>/dev/null | sed 's/^/  /'
 echo "## failed units:"; systemctl --failed --no-legend | sed 's/^/  /'
 echo "## graphics:"; ls /dev/dri/ | sed 's/^/  /'
 echo "## greetd status:"; systemctl status greetd --no-pager -n 0 | sed -n '1,4p' | sed 's/^/  /'

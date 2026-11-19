@@ -1,12 +1,60 @@
 #!/bin/bash
 set -euo pipefail
 
-ref=${NVIDIA_KMOD_REF:-main}
-[[ $ref =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "invalid NVIDIA_KMOD_REF" >&2; exit 2; }
-tmp=$(mktemp)
-trap 'rm -f "$tmp"' EXIT
+readonly REPO=musmandev092/fedora-nvidia-kmod
+SUDO=sudo; [ "$(id -u)" -eq 0 ] && SUDO=""
+die() { echo "swaydesk-nvidia-sync: $*" >&2; exit 1; }
+fetch() { curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 15 "$@"; }
 
-echo "==> Syncing pre-compiled NVIDIA driver from musmandev092/fedora-nvidia-kmod ($ref)..."
-curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 15 -o "$tmp" \
-    "https://raw.githubusercontent.com/musmandev092/fedora-nvidia-kmod/$ref/install.sh"
-sudo bash "$tmp"
+case "${1:-}" in -h|--help) echo "Usage: swaydesk-nvidia-sync [kernel-version]  (default: newest installed kernel-core)"; exit 0 ;; esac
+kver=${1:-}
+[ -n "$kver" ] || kver=$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' kernel-core 2>/dev/null | sort -V | tail -n1) || kver=""
+[[ $kver =~ ^[0-9][A-Za-z0-9._+~-]*$ ]] || die "cannot determine the target kernel; pass it as the first argument"
+rpm -q --whatprovides "kernel-uname-r = $kver" >/dev/null 2>&1 || die "kernel $kver is not installed (running: $(uname -r))"
+
+rpm_file=""
+if rpm -q "kmod-nvidia-$kver" >/dev/null 2>&1; then
+    drv=$(rpm -q --qf '%{VERSION}' "kmod-nvidia-$kver")
+else
+    echo "==> Looking for a pre-compiled NVIDIA kmod for kernel $kver"
+    rel=$(fetch "https://api.github.com/repos/$REPO/releases/tags/kmod-$kver" 2>/dev/null) \
+        || die "no pre-compiled kmod for kernel $kver in $REPO (or GitHub unreachable); nothing installed"
+    read -r name url sum < <(python3 -I -c '
+import json, sys
+k = sys.argv[1]
+for a in json.load(sys.stdin).get("assets", []):
+    n = a["name"]
+    if n.startswith("kmod-nvidia-" + k + "-") and n.endswith(".rpm") and (a.get("digest") or "").startswith("sha256:"):
+        print(n, a["browser_download_url"], a["digest"][7:])
+        break' "$kver" <<<"$rel") || die "release kmod-$kver has no checksummed kmod-nvidia-$kver RPM; nothing installed"
+    [[ $name =~ ^[A-Za-z0-9._+~-]+\.rpm$ && $url == "https://github.com/$REPO/releases/download/"* ]] \
+        || die "unexpected release asset $name; nothing installed"
+
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    rpm_file="$tmp/$name"
+    fetch -o "$rpm_file" "$url" || die "download of $name failed; nothing installed"
+    echo "$sum  $rpm_file" | sha256sum -c --status || die "SHA-256 mismatch for $name; nothing installed"
+    read -r pname drv < <(rpm -qp --nosignature --qf '%{NAME} %{VERSION}\n' "$rpm_file" 2>/dev/null) \
+        || die "$name is not a readable RPM; nothing installed"
+    [ "$pname" = "kmod-nvidia-$kver" ] || die "$name is built for ${pname#kmod-nvidia-}, not kernel $kver; nothing installed"
+    req=$(rpm -qp --nosignature --requires "$rpm_file" 2>/dev/null | sed -n 's/^kernel-uname-r = //p') || req=""
+    [ -z "$req" ] || [ "$req" = "$kver" ] || die "$name requires kernel $req, not $kver; nothing installed"
+fi
+
+missing=()
+for p in libs cuda-libs cuda power; do
+    rpm -q "xorg-x11-drv-nvidia-$p-$drv" >/dev/null 2>&1 || missing+=("xorg-x11-drv-nvidia-$p-$drv")
+done
+if [ -z "$rpm_file" ] && [ ${#missing[@]} -eq 0 ]; then
+    echo "==> kmod-nvidia-$kver and driver $drv already installed"
+    exit 0
+fi
+
+rpm -q rpmfusion-nonfree-release >/dev/null 2>&1 || $SUDO dnf -y install \
+    "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm"
+echo "==> Installing NVIDIA driver $drv for kernel $kver"
+$SUDO dnf -y --setopt=install_weak_deps=False --exclude='akmod-nvidia*' install ${rpm_file:+"$rpm_file"} "${missing[@]}" \
+    || die "dnf could not install driver $drv for kernel $kver (RPM Fusion may have moved to another version); nothing changed"
+if [ -n "$rpm_file" ]; then $SUDO dracut --force --kver "$kver"; fi
+echo "==> kmod-nvidia-$kver installed"
