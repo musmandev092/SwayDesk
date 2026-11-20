@@ -1,0 +1,20 @@
+{
+  "fixture": "dell7770",
+  "preset": "clean",
+  "silent": true,
+  "config": {
+    "locale": {"layout": "de", "variant": "nodeadkeys", "layout2": "us", "extra": ["ur_PK.UTF-8"], "font": "normal"},
+    "repos": {"fedora": "https://ix-denver.mm.fcix.net/fedora/linux", "dms": "https://musmandev092.github.io/dux-shell-rpm/repo", "testing": true},
+    "disk": {"fs": "ext4", "scheme": "plain", "home": false, "encrypt": false},
+    "swap": "none",
+    "boot": {"timeout": 3, "os_prober": false, "args": "i915.enable_psr=0"},
+    "auth": {"root_locked": false, "users": [{"name": "sara", "fullname": "Sara Khan", "admin": false}]},
+    "ssh": {"enabled": true, "keys": ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g laptop@home"]},
+    "profile": {"lean": false, "nvidia": "1"},
+    "services": {"bluetooth": false, "printing": false},
+    "network": {"installed": "none", "wired": "static", "device": "enp0s31f6", "address": "192.168.1.20/24", "gateway": "192.168.1.1", "dns": "1.1.1.1 9.9.9.9"},
+    "packages": ["htop", "@development-tools"],
+    "time": {"zone": "Europe/Berlin", "ntp": true, "servers": ["0.de.pool.ntp.org"]}
+  },
+  "secrets": {"admin_password": "Admin-pass-123!", "root_password": "Root-pass-456!", "users": {"sara": "Sara-pass-789!"}}
+}

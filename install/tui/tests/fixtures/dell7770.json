@@ -1,0 +1,25 @@
+{
+  "virt": "",
+  "uefi": true,
+  "ram": 68719476736,
+  "battery": true,
+  "nvidia": true,
+  "online": true,
+  "link": {"type": "wifi", "name": "HomeNet", "device": "wlp0s20f3"},
+  "wired": ["enp0s31f6"],
+  "preferred_disk": "nvme0n1",
+  "disks": [
+    {"name": "nvme0n1", "path": "/dev/nvme0n1", "size": 1024209543168, "model": "Micron MTFDKBA1T0TFH", "tran": "nvme",
+     "pttype": "gpt", "free": 1048576,
+     "parts": [
+       {"name": "nvme0n1p1", "size": 629145600, "fstype": "vfat", "parttype": "c12a7328-f81f-11d2-ba4b-00a0c93ec93e", "partlabel": "EFI System Partition", "label": ""},
+       {"name": "nvme0n1p2", "size": 2147483648, "fstype": "ext4", "parttype": "0fc63daf-8483-4772-8e79-3d69d8477de4", "partlabel": "", "label": ""},
+       {"name": "nvme0n1p3", "size": 1021430022144, "fstype": "crypto_LUKS", "parttype": "0fc63daf-8483-4772-8e79-3d69d8477de4", "partlabel": "", "label": ""}
+     ]}
+  ],
+  "esp_free": {"nvme0n1p1": 580000000},
+  "wifi": [{"ssid": "HomeNet", "signal": 90, "security": "WPA2 WPA3", "freq": "5180 MHz"}],
+  "fetch": {
+    "https://github.com/octo.keys": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g\nssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwOQ==\n"
+  }
+}

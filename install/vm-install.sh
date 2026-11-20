@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ISO="${VM_ISO:-$HOME/VMs/fedora-iso/swaydesk-fedora45-vm.iso}"
-VM="$HOME/VMs/test"
+VM="${VM_DIR:-$HOME/VMs/test}"
 OVMF=/usr/share/edk2/ovmf
 
 [ -f "$ISO" ] || { echo "missing $ISO (run build-iso.sh)" >&2; exit 1; }

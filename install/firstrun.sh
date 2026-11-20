@@ -21,3 +21,10 @@ if "$repo/apply.sh" "${steps[@]}" > "$log" 2>&1; then
 else
     notify -u critical "Setup did not finish" "See $log. Retry at next login or run $repo/apply.sh"
 fi
+
+# Link the login screen to the live DMS theme and wallpaper; needs the password once.
+if [ ! -e "$state/greeter-sync.done" ] && command -v dms-greeter >/dev/null; then
+    export $(systemctl --user show-environment | grep -E '^(WAYLAND_DISPLAY|SWAYSOCK|XDG_CURRENT_DESKTOP)=')
+    notify "Login screen" "Enter your password once so the login screen follows your wallpaper and theme."
+    "$HOME/.local/bin/ptyxis-e" bash -c "DMS_PRIVESC=sudo dms-greeter sync --yes && touch '$state/greeter-sync.done'; sleep 3"
+fi

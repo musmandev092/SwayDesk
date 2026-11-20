@@ -1,0 +1,12 @@
+{
+  "fixture": "dualboot",
+  "preset": "dualboot",
+  "silent": true,
+  "config": {
+    "hostname": "dualtest",
+    "auth": {"admin": {"name": "test", "fullname": "Test User"}},
+    "disk": {"size_gib": 120, "separate_pass": true},
+    "time": {"utc": false}
+  },
+  "secrets": {"admin_password": "test", "luks": "a separate pass 'phrase' #1"}
+}

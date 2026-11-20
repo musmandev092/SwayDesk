@@ -44,6 +44,7 @@ fw_set() {
 
 has_nvidia() {
     local d
+    case ${SWAYDESK_NVIDIA:-auto} in 1) return 0 ;; 0) return 1 ;; esac
     for d in /sys/bus/pci/devices/*; do
         [ "$(cat "$d/vendor" 2>/dev/null)" = 0x10de ] || continue
         case $(cat "$d/class" 2>/dev/null) in 0x0300*|0x0302*) return 0 ;; esac
@@ -295,6 +296,8 @@ EOF
     link home/.local/bin/open-here-toolbox .local/bin/open-here-toolbox
     link home/.config/dms/plugins/OpenHere .config/dms/plugins/OpenHere
     link home/.config/dms/plugins/Switcher .config/dms/plugins/Switcher
+    link home/.config/dms/patches .config/dms/patches
+    link home/.local/bin/swaydesk-dms .local/bin/swaydesk-dms
 
     local ps="$HOME/.config/dms/plugin_settings.json" psr=0 pl
     for pl in openHere:"Open Here" switcher:"Window Switcher"; do

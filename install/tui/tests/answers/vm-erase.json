@@ -1,0 +1,10 @@
+{
+  "fixture": "vm",
+  "preset": "clean",
+  "silent": true,
+  "config": {
+    "hostname": "vmtest",
+    "auth": {"admin": {"name": "test", "fullname": "Test User"}}
+  },
+  "secrets": {"admin_password": "test"}
+}

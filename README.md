@@ -11,6 +11,7 @@ A declarative, automated workstation setup for **Fedora 45** featuring official 
   - **Switcher (`Alt+Tab`, `Super+Tab`, `Super+/`)**: Windows 11-style window switcher with `grim -T` previews. See [Window switcher](#window-switcher).
   - **OpenHere (`Super+z`)**: Contextual working directory launcher for terminals and tools.
 - **Dynamic Theming**: Native Matugen color scheme synchronization between DMS wallpaper palettes and Sway window borders/titlebars.
+- **Dialogs**: file choosers, print, Open With, keyring prompts and Archive Manager extract open floating, sized to fit and centred (`55-rules-dialogs.conf`).
 - **Reproducible Installation**: Automated Anaconda Kickstarts (`ks.cfg` and `ks-dualboot.cfg`) and unattended VM test harness.
 - **Developer Suite**: Containerized toolbox environment and Neovim (LazyVim) with headless verification.
 
@@ -53,12 +54,45 @@ toolbox run -c iso ~/Projects/SwayDesk/install/build-iso.sh
 ```
 
 Generates bootable ISO images:
-- `ks-dualboot.cfg`: Installs to free space, preserving existing OS (e.g. Windows).
-- `ks.cfg`: Clean installation (re-partitions and encrypts target drive).
+- `ks-dualboot.cfg`: Starts the installer in "install alongside" mode (free space only, existing systems such as Windows are kept).
+- `ks.cfg`: Starts the installer in "erase disk" mode (re-partitions and, by default, encrypts the target drive).
 
-`build-iso.sh lean` builds the same three ISOs for Profile 1 with a `-lean` suffix. `build-iso.sh check` only validates both kickstarts with `ksvalidator`; every build validates them first. `MIRROR=https://<mirror>/fedora/linux build-iso.sh` pins the Fedora base and updates repos of the built ISOs to one fast mirror instead of the mirror list. `DMS_MIRROR=https://musmandev092.github.io/dux-shell-rpm/repo` installs the DMS packages from the GitHub Pages mirror of the COPR repositories (same COPR-signed RPMs); the installed system keeps the COPR repositories for updates. For VM tests, `COPR_CACHE=http://10.0.2.2:8080` points the DMS COPR repos at a local cache served from WSL (`createrepo_c` directories `dms/` and `danklinux/`).
+`build-iso.sh lean` builds the same three ISOs with Profile 1 preselected and a `-lean` suffix. `build-iso.sh check` runs the installer's unit tests, renders sample answers into kickstart fragments and validates both kickstarts with `ksvalidator`; every build does this first. `MIRROR=https://<mirror>/fedora/linux build-iso.sh` makes one fast mirror the installer's default Fedora source instead of the mirror list. `DMS_MIRROR=https://musmandev092.github.io/dux-shell-rpm/repo` makes the GitHub Pages mirror of the COPR repositories the default for the DMS packages (same COPR-signed RPMs); the installed system keeps the COPR repositories for updates. For VM tests, `COPR_CACHE=http://10.0.2.2:8080` points the DMS repos at a local cache served from WSL (`createrepo_c` directories `dms/` and `danklinux/`). The build also packs a package index (`PKGINDEX=0` skips it) for the installer's package search.
 
-Both installers only see the selected internal disk; USB and removable drives are never listed. The clean installer asks for `WIPE-WINDOWS` instead of `WIPE` when the disk holds NTFS, BitLocker or Microsoft reserved partitions.
+### Installer
+
+Both ISOs boot into the same full-screen installer (`install/tui`, Python standard library and curses only) on the console's tty8. The clean ISO starts in "erase disk" mode, the dual-boot ISO in "install alongside"; either can be switched in the menu. Every setting is listed with its value, the right pane explains the highlighted item, required items are marked `*`, and **Install** stays blocked, with the reasons listed, until nothing is missing.
+
+| Menu item | Choices |
+| --- | --- |
+| Locales | keyboard layout and variant (applied to the console at once, used at disk unlock and in Sway), second layout, language, extra languages, console font |
+| Mirrors and repos | Fedora mirror list or one https mirror, DMS from COPR or a mirror, updates-testing, a reachability check |
+| Disk configuration | erase or alongside, the disk (USB and removable drives are never listed), btrfs/ext4/xfs, LVM or plain with or without /home, Linux size (alongside), LUKS2 on or off, passphrase same as the administrator password or separate, unlock time |
+| Swap, Bootloader | zram size or none; GRUB timeout, other systems in the menu, extra kernel arguments |
+| Hostname, Authentication | computer name; administrator (always in `wheel`), root locked or with a password, other users |
+| SSH server | off by default; key-only, with keys pasted or fetched from `github.com/<name>.keys` |
+| Profile, Services | Profile 1 (lean) or 3 (full), NVIDIA auto/always/never; Bluetooth and printing services |
+| Network | Wi-Fi from the installer (signal, security, hidden networks), copy connections to the installed system or not, DHCP or static wired address |
+| Additional packages | searchable index; names not in the index are installed after setup, best effort |
+| Timezone, Time sync | searchable by city, country or `UTC+05`; UTC or local hardware clock; NTP on or off and custom servers |
+| Save configuration | the settings as JSON without passwords; always copied to `/root/swaydesk-config.json`, optionally to a USB stick |
+
+**Install** shows a review, asks for `WIPE` (or `WIPE-WINDOWS` when the disk holds NTFS, BitLocker or Microsoft partitions; `INSTALL` for alongside), then counts down five seconds; any key goes back. Nothing touches a disk before that.
+
+| Keys | Action |
+| --- | --- |
+| `Up`/`Down`, `j`/`k`, `Home`/`End`, `1`-`9` | Move, jump |
+| `Enter` | Edit or choose; `Space` ticks or toggles |
+| `/` or typing in long lists | Filter; `Esc` clears the filter or goes back |
+| `Ctrl+C` | Restore the default of the highlighted item |
+| `PgUp`/`PgDn` | Scroll the right pane |
+| `F1` or `?` | Help |
+| `F2` | Show the password being typed; in the review, the kickstart with secrets hidden |
+| `F10` | Install; `Ctrl+Q` aborts (power off, reboot or shell) |
+
+Account passwords are hashed with yescrypt as soon as they are entered. The disk passphrase exists only in memory and in the kickstart fragment under `/tmp/swaydesk` (mode 0600, removed in `%post`); Wi-Fi passwords go only into a NetworkManager keyfile. Weak passwords are accepted after a second `Enter`.
+
+Without a usable console (serial, or curses failing) the installer falls back to a text mode with the same settings; every prompt starts with a fixed tag such as `[hostname]`. Inside a VM only, QEMU fw_cfg can pass an answers file (`opt/swaydesk/answers.json`) for an unattended install, force the full-screen UI (`opt/swaydesk/ui=curses`) and mirror its screens as text to a serial port (`opt/swaydesk/mirror`). For development, `python3 install/tui/run.py --dry-run --fixtures dell7770 --out /tmp/sd` runs the menu in any terminal against fake hardware and writes the fragments there.
 
 ### 2. Apply System & User Configuration
 
@@ -92,11 +126,19 @@ Run the idempotent configuration orchestrator:
 
 Sway sends the keys to the plugin as `nop switcher ...` binding events (`92-switcher.conf`); while the switcher is open it holds the keyboard, which is how it sees `Alt` being released.
 
+### DMS local patches
+
+Fixes not yet in a DMS release live in `home/.config/dms/patches/` (linked to `~/.config/dms/patches`) as `git diff` output from the upstream repository (`a/quickshell/...` paths). `sway-window-pid.diff` makes the focused-window popout find the PID on Sway, so Kill Process works.
+
+Sway starts DMS through `swaydesk-dms`: it copies the packaged UI (`/usr/share/quickshell/dms`, same release as the `dms` binary) to `~/.cache/swaydesk/dms-shell/<version>-<hash>`, applies every `*.diff`/`*.patch` in name order and runs `dms run` on the copy through `DMS_SHELL_DIR`, the supported custom UI setting. The copy is reused until DMS or a patch changes; older copies not in use are removed. If a patch no longer applies (usually because the release changed or already contains the fix), or DMS exits with an error on the copy right after start, it logs one line to the journal (`journalctl -t swaydesk-dms`), shows a notification and runs plain `dms run`. `swaydesk-dms --prepare` builds the copy and prints its path without starting anything. Delete a patch once a release includes it.
+
 ### VM Tests
 
-Inside the `iso` toolbox or WSL 2 with `/dev/kvm` (packages: `qemu-system-x86-core qemu-device-display-virtio-vga qemu-img edk2-ovmf lorax pykickstart xorriso`; for 3D on the Intel host also `qemu-device-display-virtio-vga-gl qemu-ui-egl-headless`): `build-iso.sh`, then `vm-install.py` (answers the installer over serial), `vm-boot-test.py`, and `vm-run.py vm-firstboot-checks.sh` / `vm-checks.sh`. `vm-run.py vm-apply-test.sh --share ~/Projects/SwayDesk` reruns `apply.sh` to confirm a second run changes nothing.
+Inside the `iso` toolbox or WSL 2 with `/dev/kvm` (packages: `qemu-system-x86-core qemu-device-display-virtio-vga qemu-img edk2-ovmf lorax pykickstart xorriso cpio`; for 3D on the Intel host also `qemu-device-display-virtio-vga-gl qemu-ui-egl-headless`): `build-iso.sh`, then `vm-install.py` (answers the installer's text-mode prompts over serial), `vm-boot-test.py`, and `vm-run.py vm-firstboot-checks.sh` / `vm-checks.sh`. `vm-run.py vm-apply-test.sh --share ~/Projects/SwayDesk` reruns `apply.sh` to confirm a second run changes nothing.
 
-The test VM uses 8 CPUs and 16 GB RAM; override with `VM_CPUS` and `VM_MEM` (MiB). Set `VM_ISO` to install another ISO, e.g. `swaydesk-fedora45-vm-lean.iso`. `vm-run.py` uses the Intel GPU render node for 3D when present (or `VM_RENDER`), otherwise plain `virtio-vga`.
+`vm-install.py --answers` installs unattended through an fw_cfg answers file, `--tui-smoke` drives the full-screen installer with real key presses over QMP, checks each screen through the serial mirror, saves screenshots (`tui-*.png`, into `VM_SHOTS`) and aborts, `--questions-only` answers the prompts and aborts at the review, and `--setup-only` stops once the installer has written its settings. `vm-firstboot-checks.sh` also confirms that no passphrase or password is left in logs or saved kickstarts and that the saved settings hold no secrets. Installer unit tests alone: `cd install/tui && python3 -m unittest discover -s tests`.
+
+The test VM uses 8 CPUs and 16 GB RAM in `~/VMs/test`; override with `VM_CPUS`, `VM_MEM` (MiB) and `VM_DIR` (all scripts), e.g. `VM_DIR=~/VMs/tui VM_MEM=8192 VM_CPUS=6` to test beside another VM. Set `VM_ISO` to install another ISO, e.g. `swaydesk-fedora45-vm-lean.iso`. `vm-run.py` uses the Intel GPU render node for 3D when present (or `VM_RENDER`), otherwise plain `virtio-vga`.
 
 ---
 
@@ -105,6 +147,6 @@ The test VM uses 8 CPUs and 16 GB RAM; override with `VM_CPUS` and `VM_MEM` (MiB
 - `apply.sh`: Main idempotent setup orchestrator.
 - `home/`: User dotfiles, DMS plugins, Sway configurations, and custom CLI tools linked to `~`.
 - `etc/`: System-level configuration files (Wayland session, helper scripts, repository definitions).
-- `install/`: Fedora 45 Kickstart definitions and headless VM validation test scripts.
+- `install/`: Fedora 45 Kickstart definitions, the installer (`install/tui`) and headless VM validation test scripts.
 - `nvim-setup/`: Neovim IDE configuration, Mason packages, and test suites.
 - `toolbox/`: Package specifications for containerized development environments.

@@ -1,0 +1,9 @@
+{
+  "disk_by_id": "/dev/disk/by-id/nvme-MTFDKBA1T0TFH-1BC1AABHA_UMDMD01J1GBK6Z",
+  "config": {
+    "hostname": "USAY-Linux",
+    "auth": {"admin": {"name": "musmandev092", "fullname": "Muhammad Usman"}},
+    "locale": {"layout": "us", "language": "en_US.UTF-8", "font": "large"},
+    "time": {"zone": "Asia/Karachi", "utc": true, "ntp": true}
+  }
+}

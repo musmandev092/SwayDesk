@@ -1,0 +1,26 @@
+{
+  "virt": "",
+  "uefi": true,
+  "ram": 34359738368,
+  "battery": true,
+  "nvidia": false,
+  "online": true,
+  "link": null,
+  "wired": [],
+  "disks": [
+    {"name": "nvme1n1", "path": "/dev/nvme1n1", "size": 512110190592, "model": "Samsung SSD 980", "tran": "nvme",
+     "pttype": "gpt", "free": 227633266688,
+     "parts": [
+       {"name": "nvme1n1p1", "size": 104857600, "fstype": "vfat", "parttype": "c12a7328-f81f-11d2-ba4b-00a0c93ec93e", "partlabel": "EFI system partition", "label": "SYSTEM"},
+       {"name": "nvme1n1p2", "size": 16777216, "fstype": "", "parttype": "e3c9e316-0b5c-4db8-817d-f92df00215ae", "partlabel": "Microsoft reserved partition", "label": ""},
+       {"name": "nvme1n1p3", "size": 268435456000, "fstype": "BitLocker", "parttype": "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7", "partlabel": "Basic data partition", "label": ""},
+       {"name": "nvme1n1p4", "size": 681574400, "fstype": "ntfs", "parttype": "de94bba4-06d1-4d40-a16a-bfd50179d6ac", "partlabel": "", "label": "Recovery"}
+     ]}
+  ],
+  "esp_free": {"nvme1n1p1": 63963136},
+  "wifi": [
+    {"ssid": "HomeNet", "signal": 82, "security": "WPA3", "freq": "5180 MHz"},
+    {"ssid": "HomeNet-2G", "signal": 61, "security": "WPA2", "freq": "2437 MHz"},
+    {"ssid": "Cafe Free", "signal": 40, "security": "", "freq": "2412 MHz"}
+  ]
+}

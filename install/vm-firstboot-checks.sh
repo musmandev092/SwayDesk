@@ -13,6 +13,11 @@ chk "time zone Asia/Karachi"           sh -c 'timedatectl show -p Timezone --val
 chk "user is an administrator (wheel)" sh -c 'id -nG | grep -qw wheel'
 chk "full name Test User"              sh -c 'getent passwd test | cut -d: -f5 | grep -q "Test User"'
 chk "no passphrase in saved kickstart" sh -c '! echo test | sudo -S grep -q passphrase /root/anaconda-ks.cfg'
+chk "no secrets in logs or kickstarts" sh -c '! echo test | sudo -S grep -rIsqE -- "passphrase=|--plaintext|password=test" /root /var/log/anaconda'
+chk "no kickstart fragments kept"      sh -c '[ -z "$(echo test | sudo -S find /root /var/log /etc -name "ks-machine.cfg" 2>/dev/null)" ]'
+chk "settings saved without secrets"   sh -c 'c=$(echo test | sudo -S cat /root/swaydesk-config.json) && printf "%s" "$c" | grep -q "\"password\": \"set\"" && ! printf "%s" "$c" | grep -qE "[$](y|6)[$]"'
+chk "settings file is root-only"       sh -c '[ "$(echo test | sudo -S stat -c %a /root/swaydesk-config.json)" = 600 ]'
+chk "installer choices applied"        sh -c 'echo test | sudo -S grep -qx "ADMIN=test" /root/swaydesk-choices.env'
 
 echo "## installer did the system part"
 chk "SwayDesk copied to ~/Projects"    test -x ~/Projects/SwayDesk/apply.sh
@@ -49,7 +54,10 @@ chk "DMS welcome page marked seen"     sh -c 'ls ~/.config/dms/.changelog-* >/de
 chk "no second polkit agent"           sh -c '! ls ~/.config/sway/config.d/*policykit*'
 chk "Switcher plugin linked"           test -L ~/.config/dms/plugins/Switcher
 chk "OpenHere plugin linked"           test -L ~/.config/dms/plugins/OpenHere
-chk "plugins enabled in DMS"           sh -c 'grep -q "\"switcher\"" ~/.config/dms/plugin_settings.json && grep -q "\"openHere\"" ~/.config/dms/plugin_settings.json'
+chk "DMS patches and launcher linked"  sh -c 'test -L ~/.config/dms/patches && test -L ~/.local/bin/swaydesk-dms'
+chk "DMS local patches applied"        sh -c 'd=$(~/.local/bin/swaydesk-dms --prepare) && grep -q swayWindowPid "$d/Common/WindowModel.js" && test -d "$d/assets/pam"'
+chk "DMS runs the patched UI"          sh -c 'grep -qsF "$HOME/.cache/swaydesk/dms-shell/" /proc/[0-9]*/cmdline'
+chk "plugins enabled in DMS"          sh -c 'grep -q "\"switcher\"" ~/.config/dms/plugin_settings.json && grep -q "\"openHere\"" ~/.config/dms/plugin_settings.json'
 chk "sway config valid"                env WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 sway -C
 if [ "$lean" = 1 ]; then
     chk "no dev toolbox (Profile 1)"   sh -c '! podman container exists dev'

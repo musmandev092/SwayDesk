@@ -7,7 +7,7 @@ Test values only (from vm-install.py): LUKS "test", user test/test.
 """
 import os, re, socket, subprocess, sys, time
 
-VM = os.path.expanduser("~/VMs/test")
+VM = os.path.expanduser(os.environ.get("VM_DIR", "~/VMs/test"))
 OVMF = "/usr/share/edk2/ovmf"
 CPUS, MEM = os.environ.get("VM_CPUS", "8"), os.environ.get("VM_MEM", "16384")
 SER = f"{VM}/serial.sock"

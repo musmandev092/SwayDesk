@@ -11,7 +11,10 @@ The script presses real keys by printing a line such as
 (QEMU qcodes) and then `read -r _`, which returns once the keys are sent.
 Test values only (from ks.cfg's VM branch): LUKS "test", user test/test.
 """
-import argparse, json, os, re, socket, subprocess, sys, time
+import argparse, os, re, socket, subprocess, sys, time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vmkeys  # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument("script")
@@ -21,7 +24,7 @@ ap.add_argument("--share", help="directory to attach as a CD (packed with xorris
 ap.add_argument("--timeout", type=int, default=1800, help="seconds the script may run")
 args = ap.parse_args()
 
-VM = os.path.expanduser("~/VMs/test")
+VM = os.path.expanduser(os.environ.get("VM_DIR", "~/VMs/test"))
 OVMF = "/usr/share/edk2/ovmf"
 CPUS, MEM = os.environ.get("VM_CPUS", "8"), os.environ.get("VM_MEM", "16384")
 RENDER = os.environ.get("VM_RENDER", "/dev/dri/by-path/pci-0000:00:02.0-render")
@@ -111,35 +114,7 @@ def screenshot(name):
     m.close()
 
 def keys(spec):
-    q = connect(QMP, 5)
-    f = q.makefile("rwb")
-    f.readline()
-
-    def qmp(cmd, **arguments):
-        f.write(json.dumps({"execute": cmd, "arguments": arguments}).encode() + b"\n")
-        f.flush()
-        while True:
-            r = json.loads(f.readline())
-            if "return" in r or "error" in r:
-                return r
-
-    def key(code, down):
-        qmp("input-send-event", events=[{"type": "key", "data": {"down": down, "key": {"type": "qcode", "data": code}}}])
-
-    qmp("qmp_capabilities")
-    for tok in spec.split():
-        act, _, val = tok.partition(":")
-        if act == "sleep":
-            time.sleep(int(val) / 1000)
-            continue
-        if act in ("down", "tap"):
-            key(val, True)
-        if act == "tap":
-            time.sleep(0.04)
-        if act in ("up", "tap"):
-            key(val, False)
-        time.sleep(0.06)
-    q.close()
+    vmkeys.send(QMP, spec)
 
 def run_script(timeout):
     global buf

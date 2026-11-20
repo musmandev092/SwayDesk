@@ -1,0 +1,15 @@
+{
+  "virt": "kvm",
+  "uefi": true,
+  "ram": 8589934592,
+  "battery": false,
+  "nvidia": false,
+  "online": true,
+  "link": {"type": "ethernet", "name": "Wired connection 1", "device": "enp0s2"},
+  "wired": ["enp0s2"],
+  "disks": [
+    {"name": "vda", "path": "/dev/vda", "size": 64424509440, "model": "", "tran": "", "pttype": "",
+     "free": 64424509440, "parts": []}
+  ],
+  "wifi": []
+}
