@@ -101,7 +101,13 @@ cls() {
 }
 
 update-starship() {
-    curl -sS https://starship.rs/install.sh | sh -s -- --yes --bin-dir "$HOME/.local/bin"
+    local repo bin="$HOME/.local/bin/starship"
+    repo=$(readlink -f "$HOME/.bashrc.d/custom.sh") && repo=${repo%/home/.bashrc.d/custom.sh}
+    [ -x "$repo/apply.sh" ] || { echo "update-starship: SwayDesk repository not found"; return 1; }
+    command mv -f "$bin" "$bin.old" 2>/dev/null
+    "$repo/apply.sh" home >/dev/null
+    if [ -x "$bin" ]; then command rm -f "$bin.old"; "$bin" --version | head -1
+    else command mv -f "$bin.old" "$bin" 2>/dev/null; echo "update-starship: download failed; old version kept"; return 1; fi
 }
 
 if command -v starship >/dev/null; then

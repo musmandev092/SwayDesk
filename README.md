@@ -8,7 +8,7 @@ A declarative, automated workstation setup for **Fedora 45** featuring official 
 
 - **Fedora 45 Native**: Uses upstream official Fedora 45 packages for **Sway 1.12** and **wlroots** (no third-party/custom repository required).
 - **DMS Shell Integration**: Unified notification center, launcher, system controls, and custom QML plugins:
-  - **Switcher (`Alt+Tab`, `Super+Tab`)**: Windows 11-style window previews and workspace overview powered by `grim -T`.
+  - **Switcher (`Alt+Tab`, `Super+Tab`, `Super+/`)**: Windows 11-style window switcher with `grim -T` previews. See [Window switcher](#window-switcher).
   - **OpenHere (`Super+z`)**: Contextual working directory launcher for terminals and tools.
 - **Dynamic Theming**: Native Matugen color scheme synchronization between DMS wallpaper palettes and Sway window borders/titlebars.
 - **Reproducible Installation**: Automated Anaconda Kickstarts (`ks.cfg` and `ks-dualboot.cfg`) and unattended VM test harness.
@@ -56,7 +56,7 @@ Generates bootable ISO images:
 - `ks-dualboot.cfg`: Installs to free space, preserving existing OS (e.g. Windows).
 - `ks.cfg`: Clean installation (re-partitions and encrypts target drive).
 
-`build-iso.sh lean` builds only the dual-boot ISO for Profile 1. `build-iso.sh check` only validates both kickstarts with `ksvalidator`; every build validates them first.
+`build-iso.sh lean` builds the same three ISOs for Profile 1 with a `-lean` suffix. `build-iso.sh check` only validates both kickstarts with `ksvalidator`; every build validates them first. `MIRROR=https://<mirror>/fedora/linux build-iso.sh` pins the Fedora base and updates repos of the built ISOs to one fast mirror instead of the mirror list. `DMS_MIRROR=https://musmandev092.github.io/dux-shell-rpm/repo` installs the DMS packages from the GitHub Pages mirror of the COPR repositories (same COPR-signed RPMs); the installed system keeps the COPR repositories for updates. For VM tests, `COPR_CACHE=http://10.0.2.2:8080` points the DMS COPR repos at a local cache served from WSL (`createrepo_c` directories `dms/` and `danklinux/`).
 
 Both installers only see the selected internal disk; USB and removable drives are never listed. The clean installer asks for `WIPE-WINDOWS` instead of `WIPE` when the disk holds NTFS, BitLocker or Microsoft reserved partitions.
 
@@ -75,14 +75,28 @@ Run the idempotent configuration orchestrator:
 ### Firewall and SSH
 
 - Inbound: LocalSend (`53317/tcp`, `53317/udp`) only. HTTP and HTTPS are closed.
-- SSH is closed by default. Touch `.sshd` in the repository root and rerun `./apply.sh system` to open it.
-- `sshd` is always key-only (`PasswordAuthentication no`, `PermitRootLogin no`), so add your public key to `~/.ssh/authorized_keys` before opening it.
+- SSH is off by default: `sshd` is disabled and its port closed. Touch `.sshd` in the repository root and rerun `./apply.sh system` to enable both.
+- `sshd` is always key-only (`PasswordAuthentication no`, `PermitRootLogin no`), so add your public key to `~/.ssh/authorized_keys` before enabling it.
+- `apply.sh` keeps the original of every system file it replaces under `/var/backups/swaydesk/` (mode 0700), never next to the live file.
+
+### Window switcher
+
+| Keys | Action |
+| --- | --- |
+| `Alt+Tab` | Windows of the current workspace, most recently used first. Keep `Alt` down, press `Tab` or the arrows to move, release `Alt` to switch. A quick tap switches to the previous window without showing the list. |
+| `Alt+Shift+Tab` | Same, moving backwards. |
+| `Super+Tab` | Every workspace (and the scratchpad). Type to search, arrows move, `Enter` or a click switches. |
+| `Super+/` | Every shortcut, searchable; `Enter` or a click runs it. |
+| `Delete`, middle click, `✕` | Close the selected or clicked window. |
+| `Esc`, click outside | Cancel. The mouse wheel moves the selection. |
+
+Sway sends the keys to the plugin as `nop switcher ...` binding events (`92-switcher.conf`); while the switcher is open it holds the keyboard, which is how it sees `Alt` being released.
 
 ### VM Tests
 
-Inside the `iso` toolbox or WSL 2 with `/dev/kvm` (packages: `qemu-system-x86-core qemu-img edk2-ovmf lorax pykickstart xorriso`): `build-iso.sh`, then `vm-install.py` (answers the installer over serial), `vm-boot-test.py`, and `vm-run.py vm-firstboot-checks.sh` / `vm-checks.sh`. `vm-run.py vm-apply-test.sh --share ~/Projects/SwayDesk` reruns `apply.sh` to confirm a second run changes nothing.
+Inside the `iso` toolbox or WSL 2 with `/dev/kvm` (packages: `qemu-system-x86-core qemu-device-display-virtio-vga qemu-img edk2-ovmf lorax pykickstart xorriso`; for 3D on the Intel host also `qemu-device-display-virtio-vga-gl qemu-ui-egl-headless`): `build-iso.sh`, then `vm-install.py` (answers the installer over serial), `vm-boot-test.py`, and `vm-run.py vm-firstboot-checks.sh` / `vm-checks.sh`. `vm-run.py vm-apply-test.sh --share ~/Projects/SwayDesk` reruns `apply.sh` to confirm a second run changes nothing.
 
-The test VM uses 8 CPUs and 16 GB RAM; override with `VM_CPUS` and `VM_MEM` (MiB). `vm-run.py` uses the Intel GPU render node for 3D when present (or `VM_RENDER`), otherwise plain `virtio-vga`.
+The test VM uses 8 CPUs and 16 GB RAM; override with `VM_CPUS` and `VM_MEM` (MiB). Set `VM_ISO` to install another ISO, e.g. `swaydesk-fedora45-vm-lean.iso`. `vm-run.py` uses the Intel GPU render node for 3D when present (or `VM_RENDER`), otherwise plain `virtio-vga`.
 
 ---
 

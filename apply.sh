@@ -16,10 +16,14 @@ if [ "$(id -u)" -eq 0 ]; then
     SUDO=""
 fi
 
+BACKUP=/var/backups/swaydesk
 sys_put() {
     local src=$1 dst=$2 mode=${3:-0644}
     if $SUDO cmp -s "$src" "$dst" 2>/dev/null; then done_ "$dst"; return 1; fi
-    [ -e "$dst" ] && $SUDO cp -a "$dst" "$dst.bak"
+    # first original only, outside the live directory
+    if [ -e "$dst" ] && ! $SUDO test -e "$BACKUP$dst"; then
+        $SUDO install -d -m 0700 "$BACKUP" && $SUDO cp -a --parents "$dst" "$BACKUP/"
+    fi
     $SUDO install -D -m "$mode" "$src" "$dst"
     done_ "$dst (updated)"
     return 0
@@ -72,8 +76,8 @@ do_system() {
                  google-noto-color-emoji-fonts dejavu-sans-fonts dejavu-sans-mono-fonts dejavu-serif-fonts
                  adwaita-sans-fonts adwaita-mono-fonts
                  xdg-desktop-portal-gtk pipewire-gstreamer cups-pk-helper gutenprint-cups kf6-kimageformats alsa-utils btop
-                 sway sway-config-minimal sway-systemd swaybg grim grimshot slurp brightnessctl
-                 pulseaudio-utils lxqt-policykit xdg-desktop-portal-wlr
+                 sway sway-config-minimal sway-systemd grim grimshot slurp brightnessctl
+                 pulseaudio-utils xdg-desktop-portal-wlr
                  ffmpeg gstreamer1-plugin-libav gstreamer1-plugins-ugly gstreamer1-plugins-bad-freeworld) missing=() p
     for p in "${extra[@]}"; do rpm -q "$p" >/dev/null 2>&1 || missing+=("$p"); done
     if [ ${#missing[@]} -gt 0 ]; then
@@ -170,11 +174,19 @@ do_system() {
         fi
     fi
 
-    # SSH: key-only; port opened only when .sshd exists
+    # SSH: key-only; service and port enabled only when .sshd exists
     if sys_put "$HERE/etc/ssh/sshd_config.d/40-swaydesk.conf" /etc/ssh/sshd_config.d/40-swaydesk.conf 0600 \
        && systemctl is-active -q sshd 2>/dev/null; then
         $SUDO sshd -t && $SUDO systemctl reload sshd && done_ "sshd reloaded (key-only)"
     fi
+    if [ -e "$HERE/.sshd" ]; then
+        if systemctl is-enabled -q sshd 2>/dev/null; then done_ "sshd on (key-only)"
+        elif $SUDO systemctl enable --now sshd >/dev/null 2>&1; then done_ "sshd enabled (key-only)"
+        else note "sshd: could not enable"; fi
+    elif systemctl is-enabled -q sshd 2>/dev/null || systemctl is-active -q sshd 2>/dev/null; then
+        if $SUDO systemctl disable --now sshd >/dev/null 2>&1; then done_ "sshd disabled (no .sshd)"
+        else note "sshd: could not disable"; fi
+    else done_ "sshd off"; fi
 
     # Firewall: LocalSend open, no web ports
     FW=(firewall-cmd --permanent); FW_CHANGED=0
@@ -262,7 +274,7 @@ EOF
     local f
     mkdir -p "$HOME/.config/sway/config.d"
     find "$HOME/.config/sway/config.d" -xtype l -delete
-    for f in home/.config/sway/config.d/*.conf; do link "$f" ".config/sway/config.d/${f##*/}"; done
+    for f in "$HERE"/home/.config/sway/config.d/*.conf; do link "${f#"$HERE"/}" ".config/sway/config.d/${f##*/}"; done
     swaymsg reload >/dev/null 2>&1 || true
 
     local ds="$HOME/.config/dms/settings.json" dmark="$HOME/.local/state/swaydesk/dms-settings.applied"
@@ -273,6 +285,11 @@ EOF
         done_ "DMS settings (copied once)"
     elif cmp -s "$HERE/home/.config/dms/settings.json" "$ds"; then done_ "DMS settings"
     else done_ "DMS settings (live ones kept)"; fi
+    local dv
+    dv=$(rpm -q --qf '%{VERSION}' dms 2>/dev/null | grep -oE '^[0-9]+\.[0-9]+') || dv=""
+    if [ -n "$dv" ] && [ ! -e "$HOME/.config/dms/.changelog-$dv" ]; then
+        echo "$dv" > "$HOME/.config/dms/.changelog-$dv" && done_ "DMS $dv welcome page (marked as seen)"
+    fi
 
     link home/.local/bin/open-here-cwd .local/bin/open-here-cwd
     link home/.local/bin/open-here-toolbox .local/bin/open-here-toolbox
