@@ -1,0 +1,90 @@
+#!/bin/bash
+# Run DMS on a copy of its UI with ~/.config/dms/patches applied; falls back to plain `dms run`.
+set -u
+
+base=${SWAYDESK_DMS_BASE:-/usr/share/quickshell/dms}
+patches=${SWAYDESK_DMS_PATCHES:-${XDG_CONFIG_HOME:-$HOME/.config}/dms/patches}
+cache=${SWAYDESK_DMS_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/swaydesk/dms-shell}
+dir="" err=""
+
+plain_run() {
+    logger -t swaydesk-dms -p user.warning -- "$1; starting DMS without local patches" 2>/dev/null
+    echo "swaydesk-dms: $1; starting DMS without local patches" >&2
+    (sleep 20; timeout 10 notify-send -a SwayDesk "DMS started without local patches" "$1") >/dev/null 2>&1 &
+    shift
+    exec dms run "$@"
+}
+
+apply_patch() {
+    if command -v git >/dev/null 2>&1; then
+        (cd "$1" && GIT_CEILING_DIRECTORIES=${1%/*} git apply -p2 -- "$2") 2>/dev/null
+    else
+        patch -d "$1" -p2 -F0 -N -s -i "$2" >/dev/null 2>&1
+    fi
+}
+
+in_use() {
+    grep -qsF -- "$1" /proc/[0-9]*/cmdline /proc/[0-9]*/environ
+}
+
+# Sets dir; returns 2 when there is nothing to patch, 1 with err set on failure.
+prepare() {
+    local list=() p ver key tmp d
+    mapfile -t list < <(find -L "$patches" -maxdepth 1 -type f \( -name '*.diff' -o -name '*.patch' \) 2>/dev/null | LC_ALL=C sort)
+    [ ${#list[@]} -gt 0 ] || return 2
+    [ -f "$base/shell.qml" ] || { err="no DMS UI at $base"; return 1; }
+    ver=$(tr -cd '0-9A-Za-z.+_-' 2>/dev/null <"$base/VERSION"); ver=${ver:-unknown}
+    key=$({
+        echo "1 $base $ver"
+        stat -Lc '%s %Y' "$(command -v dms)" "$base/shell.qml" 2>/dev/null
+        for p in "${list[@]}"; do echo "${p##*/}"; cat "$p"; done
+    } | sha256sum | cut -c1-16)
+    dir=$cache/$ver-$key
+    if [ ! -f "$dir/.swaydesk-patches" ]; then
+        if ! mkdir -p "$cache" || ! tmp=$(mktemp -d "$cache/.build.XXXXXX"); then
+            err="cannot write $cache"; return 1
+        fi
+        if ! cp -a --no-preserve=ownership "$base/." "$tmp/" || ! chmod -R u+w "$tmp"; then
+            rm -rf "$tmp"; err="cannot copy $base"; return 1
+        fi
+        for p in "${list[@]}"; do
+            apply_patch "$tmp" "$p" || { rm -rf "$tmp"; err="${p##*/} does not apply to DMS $ver"; return 1; }
+        done
+        printf '%s\n' "${list[@]##*/}" >"$tmp/.swaydesk-patches"
+        rm -rf "$dir"
+        if ! mv -T "$tmp" "$dir" 2>/dev/null; then
+            rm -rf "$tmp"
+            [ -f "$dir/.swaydesk-patches" ] || { err="cannot create $dir"; return 1; }
+        fi
+    fi
+    for d in "$cache"/*-????????????????; do
+        [ -d "$d" ] && [ "$d" != "$dir" ] && ! in_use "$d" && rm -rf "$d"
+    done
+    find "$cache" -maxdepth 1 -name '.build.*' -mmin +10 -exec rm -rf {} + 2>/dev/null
+    return 0
+}
+
+if [ "${1:-}" = --prepare ]; then
+    prepare
+    case $? in
+        0) echo "$dir" ;;
+        2) echo "swaydesk-dms: no patches in $patches" >&2 ;;
+        *) echo "swaydesk-dms: $err" >&2; exit 1 ;;
+    esac
+    exit 0
+fi
+
+prepare
+case $? in
+    1) plain_run "$err" "$@" ;;
+    2) exec dms run "$@" ;;
+esac
+
+start=$SECONDS
+DMS_SHELL_DIR=$dir dms run "$@"; rc=$?
+# An early error exit on the patched copy (not a signal, not a restart) retries once without it.
+if [ "$rc" -ne 0 ] && [ "$rc" -lt 128 ] && [ "$rc" -ne 75 ] && [ $((SECONDS - start)) -lt 20 ] \
+   && ! pgrep -u "$(id -u)" -x dms >/dev/null; then
+    plain_run "DMS exited with status $rc on $dir" "$@"
+fi
+exit "$rc"

@@ -1,0 +1,85 @@
+Sway/Scroll: foreign toplevels carry no PID, so the focused-window popout showed
+"PID: Unavailable" and disabled Kill Process; look the PID up in swaymsg get_tree.
+
+diff --git a/quickshell/Common/WindowModel.js b/quickshell/Common/WindowModel.js
+index 432a3b8..020a53e 100644
+--- a/quickshell/Common/WindowModel.js
++++ b/quickshell/Common/WindowModel.js
+@@ -172,6 +172,28 @@ function mangoWindowPid(windows, sortedWindow) {
+     return windows.find(w => w.id === sortedWindow.mangoWindowId)?.pid || 0;
+ }
+ 
++// Sway and Scroll expose no PID on foreign toplevels; match the get_tree node by app ID and title
++function swayWindowPid(tree, toplevel, screenName) {
++    if (!tree || !toplevel)
++        return 0;
++    const appId = toplevel.appId || "";
++    const title = toplevel.title || "";
++    const matches = [];
++    const visit = (node, output) => {
++        if (node.type === "output")
++            output = node.name;
++        if (node.pid > 0 && (node.app_id || node.window_properties?.class || "") === appId && (node.name || "") === title)
++            matches.push({ node, output });
++        for (const child of node.nodes || [])
++            visit(child, output);
++        for (const child of node.floating_nodes || [])
++            visit(child, output);
++    };
++    visit(tree, "");
++    const match = matches.find(m => m.node.focused) || matches.find(m => m.node.visible && m.output === screenName) || (matches.length === 1 ? matches[0] : null);
++    return match?.node.pid || 0;
++}
++
+ function mangoVisibleWindows(windows, output, screenName) {
+     const active = new Set(output?.activeTags || []);
+     return windows.filter(win => {
+diff --git a/quickshell/Modules/DBar/Widgets/FocusedApp.qml b/quickshell/Modules/DBar/Widgets/FocusedApp.qml
+index f8b3eed..007a77c 100644
+--- a/quickshell/Modules/DBar/Widgets/FocusedApp.qml
++++ b/quickshell/Modules/DBar/Widgets/FocusedApp.qml
+@@ -68,8 +68,14 @@ BasePill {
+         const popout = focusedWindowPopoutLoader.item;
+         if (!popout || !activeWindow || !root.parentScreen)
+             return;
+-        popout.currentWindow = activeWindow;
+-        popout.processId = CompositorService.windowPid(activeWindow);
++        const window = activeWindow;
++        if (popout.currentWindow !== window)
++            popout.processId = 0;
++        popout.currentWindow = window;
++        CompositorService.resolveWindowPid(window, root.parentScreen.name, pid => {
++            if (popout.currentWindow === window)
++                popout.processId = pid;
++        });
+         root.positionPopout(popout);
+     }
+ 
+diff --git a/quickshell/Services/CompositorService.qml b/quickshell/Services/CompositorService.qml
+index f4e025a..c22de80 100644
+--- a/quickshell/Services/CompositorService.qml
++++ b/quickshell/Services/CompositorService.qml
+@@ -1427,6 +1427,23 @@ Singleton {
+         }
+     }
+ 
++    function resolveWindowPid(toplevel, screenName, callback) {
++        const pid = windowPid(toplevel);
++        if (pid > 0 || !(isSway || isScroll)) {
++            callback(pid);
++            return;
++        }
++        Proc.runCommand("window-pid", [isSway ? "swaymsg" : "scrollmsg", "-t", "get_tree", "-r"], (output, exitCode) => {
++            let found = 0;
++            if (exitCode === 0) {
++                try {
++                    found = WindowModel.swayWindowPid(JSON.parse(output), toplevel, screenName);
++                } catch (e) {}
++            }
++            callback(found);
++        }, 0);
++    }
++
+     function windowOnActiveWorkspace(screenName, toplevel, includeLastFocused) {
+         switch (compositor) {
+         case "niri":
