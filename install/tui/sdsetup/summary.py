@@ -35,7 +35,7 @@ def locale_value(c):
 def repos_value(c):
     r = c.repos
     f = "one mirror" if r.fedora else "mirror list"
-    d = "mirror" if r.dms else ("cache" if r.copr_cache else "COPR")
+    d = "cache" if r.copr_cache else "COPR"
     return f"{f}, DMS {d}" + (", testing" if r.testing else "")
 
 

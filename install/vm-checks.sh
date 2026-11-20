@@ -22,7 +22,7 @@ chk "login screen (greetd) running"     systemctl is-active greetd
 chk "quickshell is 0.3+ (DMS build)"    sh -c 'rpm -q quickshell | grep -q "^quickshell-0\.[3-9]"'
 chk "sway is 1.12+"                     sh -c 'sway --version | grep -qE " 1\.1[2-9]"'
 chk "Fedora copies of DMS deps hidden"  test -f /etc/dnf/repos.override.d/50-dms-copr.repo
-for p in quickshell danksearch dgop matugen dms dms-greeter sway sway-config-minimal; do printf '        %s\n' "$(rpm -q "$p")"; done
+for p in quickshell dux-search dux-gop matugen dms dux-greeter sway sway-config-minimal; do printf '        %s\n' "$(rpm -q "$p")"; done
 
 echo "## apps"
 for p in brave-origin nautilus sushi ptyxis papers loupe showtime snapshot cups system-config-printer gnome-software; do

@@ -246,12 +246,15 @@ class KickstartTest(unittest.TestCase):
     def test_mirrors(self):
         c, s, p = ready()
         c.repos.fedora = "https://ix-denver.mm.fcix.net/fedora/linux"
-        c.repos.dms = "https://musmandev092.github.io/dux-shell-rpm/repo"
         c.repos.testing = True
         m = kickstart.render(c, s, p, env(p))["ks-machine.cfg"]
         self.assertIn("url --url=https://ix-denver.mm.fcix.net/fedora/linux/releases/45/Everything/x86_64/os/", m)
         self.assertIn("repo --name=fedora-updates-testing --baseurl=https://ix-denver.mm.fcix.net/fedora/linux/updates/testing/45/", m)
-        self.assertIn("repo --name=dms --baseurl=https://musmandev092.github.io/dux-shell-rpm/repo/", m)
+        self.assertIn("repo --name=dms --baseurl=https://download.copr.fedorainfracloud.org/results/duxlabs/dms/fedora-45-x86_64/", m)
+        self.assertIn("repo --name=dux-repo --baseurl=https://download.copr.fedorainfracloud.org/results/duxlabs/dux-repo/", m)
+        c.repos.copr_cache = "http://10.0.2.2:8080"
+        m = kickstart.render(c, s, p, env(p))["ks-machine.cfg"]
+        self.assertIn("repo --name=dux-repo --baseurl=http://10.0.2.2:8080/dux-repo/", m)
 
     def test_write_modes(self):
         c, s, p = ready()

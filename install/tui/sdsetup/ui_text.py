@@ -1,7 +1,7 @@
 import sys
 
 from . import data, model, summary as S, validate as V
-from .menus import DMS_PAGES, default_disk
+from .menus import default_disk
 from .probe import GIB, human
 from .secret import Secret, WEAK, hash_password, strength
 
@@ -258,12 +258,6 @@ class TextUI:
         r.fedora = self.ask("fedora-mirror", "Fedora mirror URL (none = mirror list)", r.fedora or "none",
                             lambda v: "" if v == "none" else V.mirror_url(v))
         r.fedora = "" if r.fedora == "none" else r.fedora.rstrip("/")
-        dms = self.ask("dms-mirror", f"DMS repository URL (copr, or e.g. {DMS_PAGES})", r.dms or ("copr" if not r.copr_cache else "cache"),
-                       lambda v: "" if v in ("copr", "cache") else V.mirror_url(v))
-        if dms == "copr":
-            r.dms, r.copr_cache = "", ""
-        elif dms != "cache":
-            r.dms, r.copr_cache = dms.rstrip("/"), ""
         r.testing = self.yes("testing", "Enable updates-testing?", r.testing)
 
     def sec_swap(self):

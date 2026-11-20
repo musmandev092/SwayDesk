@@ -30,7 +30,6 @@ def initial_config(defaults, build, preset):
     config.disk.mode = "alongside" if preset == "dualboot" else "erase"
     config.profile.lean = bool(build.get("lean", config.profile.lean))
     config.repos.fedora = build.get("fedora", "") or config.repos.fedora
-    config.repos.dms = build.get("dms", "") or config.repos.dms
     config.repos.copr_cache = build.get("copr_cache", "") or config.repos.copr_cache
     return config
 

@@ -5,10 +5,11 @@ import shlex
 from . import data
 
 RELEASE = "45"
-EXCLUDE = "quickshell,danksearch,dgop,matugen"
+EXCLUDE = "quickshell,dux-search,dux-gop,matugen"
 ML_FEDORA = "https://mirrors.fedoraproject.org/mirrorlist?repo={}&arch=x86_64&protocol=https"
 ML_FUSION = "https://mirrors.rpmfusion.org/mirrorlist?repo={}&arch=x86_64"
-COPR = "https://download.copr.fedorainfracloud.org/results/avengemedia/{}/fedora-" + RELEASE + "-x86_64/"
+COPR = "https://download.copr.fedorainfracloud.org/results/duxlabs/{}/fedora-" + RELEASE + "-x86_64/"
+DMS_REPOS = ("dms", "dux-repo")
 NVIDIA_ARGS = "rd.driver.blacklist=nouveau,nova_core modprobe.blacklist=nouveau,nova_core nvidia-drm.modeset=1 nvidia-drm.fbdev=1"
 SERIAL_ARGS = "console=tty0 console=ttyS0,115200"
 HIDDEN = "********"
@@ -41,13 +42,8 @@ def repo_lines(r):
                      ("rpmfusion-nonfree", "nonfree-fedora-"), ("rpmfusion-nonfree-updates", "nonfree-fedora-updates-released-")):
         out.append(f"repo --name={name} {opt('mirrorlist', ML_FUSION.format(ml + RELEASE))}")
     out.append("repo --name=brave-browser --baseurl=https://brave-browser-rpm-release.s3.brave.com/x86_64")
-    for name in ("dms", "danklinux"):
-        if r.dms:
-            url = r.dms.rstrip("/") + "/"
-        elif r.copr_cache:
-            url = f"{r.copr_cache.rstrip('/')}/{name}/"
-        else:
-            url = COPR.format(name)
+    for name in DMS_REPOS:
+        url = f"{r.copr_cache.rstrip('/')}/{name}/" if r.copr_cache else COPR.format(name)
         out.append(f"repo --name={name} {opt('baseurl', url)}")
     out.append("repo --name=claude-desktop --baseurl=https://musmandev092.github.io/claude-desktop-rpm/repo")
     return out

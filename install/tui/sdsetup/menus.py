@@ -5,7 +5,6 @@ from .tui import dialogs as D
 from .tui.menu import Done, Item, Menu, back, blank
 from .tui.widgets import TextField, wrap
 
-DMS_PAGES = "https://musmandev092.github.io/dux-shell-rpm/repo"
 FONTS = {"large": "latarcyrheb-sun32", "normal": "eurlatgr"}
 
 
@@ -128,7 +127,7 @@ class Setup:
     def prev_repos(self):
         r = self.c.repos
         out = [("MIRRORS AND REPOSITORIES", "bold"), f"Fedora  {r.fedora or 'mirror list (automatic)'}",
-               f"DMS     {r.dms or (r.copr_cache + ' (cache)' if r.copr_cache else 'COPR')}",
+               f"DMS     {r.copr_cache + ' (cache)' if r.copr_cache else 'COPR duxlabs/dms, duxlabs/dux-repo'}",
                f"Testing {'on' if r.testing else 'off'}", "RPM Fusion, Brave, personal repo: on (required)"]
         if self.repo_status:
             out.append("")
@@ -326,8 +325,8 @@ class Setup:
         Menu(self.ui, "Mirrors and repositories", [
             Item("Fedora source", lambda: "one mirror" if r.fedora else "mirror list", action=self.fedora_source,
                  preview=self.prev_repos, reset=lambda: setattr(r, "fedora", self.defaults["repos"]["fedora"])),
-            Item("DMS packages", lambda: "mirror" if r.dms else ("cache" if r.copr_cache else "COPR"),
-                 action=self.dms_source, preview=self.prev_repos),
+            Item("DMS packages", lambda: "cache" if r.copr_cache else "COPR (duxlabs)", readonly=True,
+                 preview=self.prev_repos),
             self.toggle_item("updates-testing", lambda: r.testing, lambda v: setattr(r, "testing", v),
                              preview=lambda: ["Fedora's testing updates. Off unless you test packages."]),
             Item("RPM Fusion", lambda: "on (required)", readonly=True),
@@ -349,21 +348,6 @@ class Setup:
                        note="Base of releases/ and updates/, e.g. https://host/fedora/linux")
             if f:
                 r.fedora = f["url"].rstrip("/")
-
-    def dms_source(self):
-        r = self.c.repos
-        opts = [("", "COPR (Fedora build service)"), (DMS_PAGES, "GitHub Pages mirror (same signed RPMs)"),
-                ("custom", "Other URL...")]
-        res = self.pick_simple("DMS packages", opts, r.dms if r.dms in ("", DMS_PAGES) else "custom")
-        if res is None:
-            return
-        if res == "custom":
-            f = D.form(self.ui, "DMS repository", [{"key": "url", "label": "URL", "value": r.dms or "https://",
-                                                    "validate": V.mirror_url}])
-            if f:
-                r.dms, r.copr_cache = f["url"].rstrip("/"), ""
-        else:
-            r.dms, r.copr_cache = res, ""
 
     def check_repos(self):
         r = self.c.repos

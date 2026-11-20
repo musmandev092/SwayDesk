@@ -4,7 +4,7 @@
   "silent": true,
   "config": {
     "locale": {"layout": "de", "variant": "nodeadkeys", "layout2": "us", "extra": ["ur_PK.UTF-8"], "font": "normal"},
-    "repos": {"fedora": "https://ix-denver.mm.fcix.net/fedora/linux", "dms": "https://musmandev092.github.io/dux-shell-rpm/repo", "testing": true},
+    "repos": {"fedora": "https://ix-denver.mm.fcix.net/fedora/linux", "testing": true},
     "disk": {"fs": "ext4", "scheme": "plain", "home": false, "encrypt": false},
     "swap": "none",
     "boot": {"timeout": 3, "os_prober": false, "args": "i915.enable_psr=0"},

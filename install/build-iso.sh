@@ -35,7 +35,6 @@ validate() {
 url_ok() { [[ $2 =~ $3 ]] || { echo "$1 must be an $4 URL" >&2; exit 2; }; }
 HTTPS='^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._/-]*)?$'
 [ -z "${MIRROR:-}" ] || { url_ok MIRROR "$MIRROR" "$HTTPS" https; MIRROR=${MIRROR%/}; }
-[ -z "${DMS_MIRROR:-}" ] || { url_ok DMS_MIRROR "$DMS_MIRROR" "$HTTPS" https; DMS_MIRROR=${DMS_MIRROR%/}; }
 [ -z "${COPR_CACHE:-}" ] || { url_ok COPR_CACHE "$COPR_CACHE" '^https?://[A-Za-z0-9.:-]+(/[A-Za-z0-9._/-]*)?$' "http(s)"; COPR_CACHE=${COPR_CACHE%/}; }
 
 unit_tests
@@ -55,9 +54,9 @@ rsync -a --exclude='target/' --exclude='.git/' --exclude='__pycache__/' --exclud
 T="$STAGE/SwayDesk/install/tui"
 
 LEAN=false; [ "$MODE" = lean ] && LEAN=true
-LEAN=$LEAN FEDORA="${MIRROR:-}" DMS="${DMS_MIRROR:-}" CACHE="${COPR_CACHE:-}" python3 -c '
+LEAN=$LEAN FEDORA="${MIRROR:-}" CACHE="${COPR_CACHE:-}" python3 -c '
 import json, os, sys
-json.dump({"lean": os.environ["LEAN"] == "true", "fedora": os.environ["FEDORA"], "dms": os.environ["DMS"],
+json.dump({"lean": os.environ["LEAN"] == "true", "fedora": os.environ["FEDORA"],
            "copr_cache": os.environ["CACHE"]}, open(sys.argv[1], "w"), indent=2)' "$T/build.json"
 echo "installer defaults: $(tr -d '\n' < "$T/build.json")"
 

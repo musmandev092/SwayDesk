@@ -91,7 +91,7 @@ try:
     checks = r"""
 printf '==%s==\n' BEGIN
 echo "## kernel:"; uname -r
-echo "## installed:"; rpm -q sway dms dms-greeter greetd brave-origin chromium microsoft-edge-stable powershell toolbox nautilus sushi ptyxis cups | sed 's/^/  /'
+echo "## installed:"; rpm -q sway dms dux-greeter greetd brave-origin chromium microsoft-edge-stable powershell toolbox nautilus sushi ptyxis cups | sed 's/^/  /'
 echo "## packages total: $(rpm -qa | wc -l)"
 echo "## boot target: $(systemctl get-default)"
 echo "## greetd: $(systemctl is-enabled greetd) / $(systemctl is-active greetd)"

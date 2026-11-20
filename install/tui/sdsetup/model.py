@@ -20,7 +20,6 @@ class Locale:
 @dataclass
 class Repos:
     fedora: str = ""
-    dms: str = ""
     copr_cache: str = ""
     testing: bool = False
 
