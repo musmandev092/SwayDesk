@@ -1,0 +1,24 @@
+Sway ignores maximize requests, so the window maximize button and double-click did nothing;
+toggle Sway fullscreen on the focused window instead.
+
+diff --git a/quickshell/DCommon/Widgets/FloatingWindowControls.qml b/quickshell/DCommon/Widgets/FloatingWindowControls.qml
+--- a/quickshell/DCommon/Widgets/FloatingWindowControls.qml
++++ b/quickshell/DCommon/Widgets/FloatingWindowControls.qml
+@@ -1,4 +1,6 @@
+ import QtQuick
++import Quickshell
++import Quickshell.I3
+ import qs.DCommon.Common
+ 
+ Item {
+@@ -47,6 +49,10 @@ Item {
+     function tryToggleMaximize() {
+         if (!canMaximize)
+             return;
++        if (Quickshell.env("SWAYSOCK")) {
++            I3.dispatch("fullscreen toggle");
++            return;
++        }
+         targetWindow.maximized = !targetWindow.maximized;
+     }
+ 
