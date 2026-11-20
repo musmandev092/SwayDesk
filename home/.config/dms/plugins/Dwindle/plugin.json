@@ -1,0 +1,12 @@
+{
+    "id": "dwindle",
+    "name": "Dwindle Tiling",
+    "description": "Hyprland style dwindle tiling for Sway: each new window splits the last focused one, side by side when it is wide and stacked when it is tall. Per-workspace on/off and a workspace tabs toggle.",
+    "version": "1.0.0",
+    "author": "Muhammad Usman",
+    "type": "daemon",
+    "capabilities": ["daemon"],
+    "component": "./DwindleDaemon.qml",
+    "icon": "dashboard",
+    "requires": ["sway"]
+}

@@ -138,6 +138,8 @@ Inside the `iso` toolbox or WSL 2 with `/dev/kvm` (packages: `qemu-system-x86-co
 
 `vm-install.py --answers` installs unattended through an fw_cfg answers file, `--tui-smoke` drives the full-screen installer with real key presses over QMP, checks each screen through the serial mirror, saves screenshots (`tui-*.png`, into `VM_SHOTS`) and aborts, `--questions-only` answers the prompts and aborts at the review, and `--setup-only` stops once the installer has written its settings. `vm-firstboot-checks.sh` also confirms that no passphrase or password is left in logs or saved kickstarts and that the saved settings hold no secrets. Installer unit tests alone: `cd install/tui && python3 -m unittest discover -s tests`.
 
+Dwindle plugin stress test (packages: `sway gcc wayland-devel wayland-protocols-devel wlr-protocols-devel nodejs`, `quickshell` for `--plugin qml`): `node install/tests/dwindle/run.mjs --scenarios 10000 --jobs 12` runs seeded random window, keyboard and mouse scenarios against headless Sway instances (several resolutions, two outputs) through `DwindleLogic.js` and checks each quiet tree against an independent dwindle model. Failing seeds land in `--out` (default `/tmp/dwindle-test`) and replay with `--replay SEED --verbose`; `--plugin qml` drives the real `DwindleDaemon.qml` in Quickshell, `--bench 30` measures the cost per window.
+
 The test VM uses 8 CPUs and 16 GB RAM in `~/VMs/test`; override with `VM_CPUS`, `VM_MEM` (MiB) and `VM_DIR` (all scripts), e.g. `VM_DIR=~/VMs/tui VM_MEM=8192 VM_CPUS=6` to test beside another VM. Set `VM_ISO` to install another ISO, e.g. `swaydesk-fedora45-vm-lean.iso`. `vm-run.py` uses the Intel GPU render node for 3D when present (or `VM_RENDER`), otherwise plain `virtio-vga`.
 
 ---
