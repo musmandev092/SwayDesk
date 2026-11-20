@@ -31,6 +31,8 @@ qemu = subprocess.Popen([
 
 def connect(path, tries=60):
     for _ in range(tries):
+        if qemu.poll() is not None:
+            sys.exit(f"qemu exited with code {qemu.returncode}")
         try:
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             s.connect(path)
@@ -112,7 +114,10 @@ printf '==%s==\n' END
     out = wait_for(r"==END==", 240)
     print(out[out.rfind("==BEGIN==") + 10:].replace("\r", ""), flush=True)
     send("echo test | sudo -S poweroff\r")
-    qemu.wait(timeout=120)
+    try:
+        qemu.wait(timeout=120)
+    except subprocess.TimeoutExpired:
+        qemu.kill()
 except Exception as e:
     print(f"BOOT TEST ERROR: {e}", flush=True)
     print(buf.decode(errors="replace")[-2000:], flush=True)

@@ -6,9 +6,12 @@ Usage (in the `iso` toolbox):
     python3 vm-run.py SCRIPT.sh [--screenshot NAME] [--settle SECONDS] [--share DIR]
 SCRIPT runs as user `test` (sudo password: test). With --share DIR, DIR is
 packed into an ISO and attached; the script can mount it from /dev/sr0.
+The script presses real keys by printing a line such as
+    ==KEY down:alt tap:tab tap:tab up:alt sleep:200==
+(QEMU qcodes) and then `read -r _`, which returns once the keys are sent.
 Test values only (from ks.cfg's VM branch): LUKS "test", user test/test.
 """
-import argparse, os, re, socket, subprocess, sys, time
+import argparse, json, os, re, socket, subprocess, sys, time
 
 ap = argparse.ArgumentParser()
 ap.add_argument("script")
@@ -26,9 +29,9 @@ if os.path.exists(RENDER):
     GPU = ["-device", "virtio-vga-gl", "-display", f"egl-headless,rendernode={os.path.realpath(RENDER)}"]
 else:
     GPU = ["-device", "virtio-vga", "-display", "none"]
-SER, MON = f"{VM}/serial.sock", f"{VM}/monitor.sock"
+SER, MON, QMP = f"{VM}/serial.sock", f"{VM}/monitor.sock", f"{VM}/qmp.sock"
 LOG = open(f"{VM}/run-serial.log", "wb")
-for p in (SER, MON):
+for p in (SER, MON, QMP):
     if os.path.exists(p):
         os.unlink(p)
 
@@ -42,6 +45,7 @@ cmd = [
     *GPU,
     "-chardev", f"socket,id=s0,path={SER},server=on,wait=off", "-serial", "chardev:s0",
     "-monitor", f"unix:{MON},server,nowait",
+    "-qmp", f"unix:{QMP},server,nowait",
 ]
 if args.share:
     share_iso = f"{VM}/share.iso"
@@ -52,6 +56,8 @@ qemu = subprocess.Popen(cmd)
 
 def connect(path, tries=60):
     for _ in range(tries):
+        if qemu.poll() is not None:
+            sys.exit(f"qemu exited with code {qemu.returncode}")
         try:
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             s.connect(path)
@@ -104,6 +110,60 @@ def screenshot(name):
         pass
     m.close()
 
+def keys(spec):
+    q = connect(QMP, 5)
+    f = q.makefile("rwb")
+    f.readline()
+
+    def qmp(cmd, **arguments):
+        f.write(json.dumps({"execute": cmd, "arguments": arguments}).encode() + b"\n")
+        f.flush()
+        while True:
+            r = json.loads(f.readline())
+            if "return" in r or "error" in r:
+                return r
+
+    def key(code, down):
+        qmp("input-send-event", events=[{"type": "key", "data": {"down": down, "key": {"type": "qcode", "data": code}}}])
+
+    qmp("qmp_capabilities")
+    for tok in spec.split():
+        act, _, val = tok.partition(":")
+        if act == "sleep":
+            time.sleep(int(val) / 1000)
+            continue
+        if act in ("down", "tap"):
+            key(val, True)
+        if act == "tap":
+            time.sleep(0.04)
+        if act in ("up", "tap"):
+            key(val, False)
+        time.sleep(0.06)
+    q.close()
+
+def run_script(timeout):
+    global buf
+    end, out = time.time() + timeout, b""
+    rx = re.compile(rb"==KEY ([^=\r\n]*)==")
+    while time.time() < end:
+        try:
+            chunk = ser.recv(65536)
+            if not chunk:
+                break
+            LOG.write(chunk); LOG.flush()
+            buf += chunk
+        except socket.timeout:
+            pass
+        while (m := rx.search(buf)):
+            out, buf = out + buf[:m.end()], buf[m.end():]
+            keys(m.group(1).decode())
+            send("\r")
+        i = buf.find(b"==DONE==")
+        if i >= 0:
+            out, buf = out + buf[:i + 8], buf[i + 8:]
+            return out.decode(errors="replace")
+    raise TimeoutError("timed out waiting for the script")
+
 ANSI = re.compile(r"\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b\[[0-9;?]*[a-zA-Z]|\r")
 try:
     wait_for(r"[Pp]assphrase", 300)
@@ -129,7 +189,7 @@ try:
         print("screenshot: none (no greeter sway running?)", flush=True)
     payload = base64.b64encode(open(args.script, "rb").read()).decode()
     send(f"echo {payload} | base64 -d > /tmp/run.sh; printf '==%s==\\n' START; bash /tmp/run.sh 2>&1; printf '==%s==\\n' DONE\r")
-    out = wait_for(r"==DONE==", args.timeout)
+    out = run_script(args.timeout)
     text = ANSI.sub("", out)
     print(text[text.rfind("==START==") + 10: text.rfind("==DONE==")], flush=True)
     send("echo test | sudo -S systemctl poweroff\r")

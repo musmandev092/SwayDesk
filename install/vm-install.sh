@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-ISO="$HOME/VMs/fedora-iso/swaydesk-fedora45-vm.iso"
+ISO="${VM_ISO:-$HOME/VMs/fedora-iso/swaydesk-fedora45-vm.iso}"
 VM="$HOME/VMs/test"
 OVMF=/usr/share/edk2/ovmf
 

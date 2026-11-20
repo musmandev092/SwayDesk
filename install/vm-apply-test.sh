@@ -36,7 +36,7 @@ chk "nvim config linked"              test -L ~/.config/nvim
 chk "Nerd font installed"             sh -c 'fc-list | grep -qi "JetBrainsMono Nerd"'
 chk "Urdu font installed"             sh -c 'fc-list | grep -qi "Noto Nastaliq Urdu"'
 chk "sway: DMS binds linked"          test -L ~/.config/sway/config.d/91-dms.conf
-chk "sway config valid"               sway -C
+chk "sway config valid"               env WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 sway -C
 chk "DMS settings"                    test -f ~/.config/dms/settings.json
 chk "starship"                        ~/.local/bin/starship --version
 chk "lazygit"                         ~/.local/bin/lazygit --version

@@ -8,7 +8,7 @@ Runs in the `iso` toolbox:  python3 vm-install.py [--questions-only]
 """
 import os, re, shutil, socket, subprocess, sys, time
 
-ISO = os.path.expanduser("~/VMs/fedora-iso/swaydesk-fedora45-vm.iso")
+ISO = os.environ.get("VM_ISO") or os.path.expanduser("~/VMs/fedora-iso/swaydesk-fedora45-vm.iso")
 VM = os.path.expanduser("~/VMs/test")
 OVMF = "/usr/share/edk2/ovmf"
 CPUS, MEM = os.environ.get("VM_CPUS", "8"), os.environ.get("VM_MEM", "16384")
@@ -54,6 +54,8 @@ qemu = subprocess.Popen([
 ])
 
 for _ in range(60):
+    if qemu.poll() is not None:
+        sys.exit(f"qemu exited with code {qemu.returncode}")
     try:
         ser = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); ser.connect(SER); break
     except OSError:
@@ -100,6 +102,7 @@ try:
         print(tail[tail.rfind("=== Summary"):tail.rfind("=== Summary") + 600], flush=True)
         sys.exit(0)
     print("installing ...", flush=True)
+    last_check = 0
     while qemu.poll() is None:
         try:
             chunk = ser.recv(65536)
@@ -109,6 +112,14 @@ try:
             pass
         except OSError:
             break
+        if time.time() - last_check > 30:
+            last_check = time.time()
+            with open(CON, "rb") as f:
+                f.seek(max(0, os.path.getsize(CON) - 8192))
+                tail = re.sub(rb"\x1b\[[0-9;?]*[a-zA-Z]", b"", f.read()).decode(errors="replace")
+            if "Press ENTER to exit" in tail:
+                msg = tail[tail.rfind("Error"):tail.rfind("Press ENTER")].strip() or tail[-600:]
+                raise RuntimeError("installer hit a fatal error: " + " ".join(msg.split()))
     qemu.wait()
 except Exception as e:
     print(f"VM INSTALL ERROR: {e}", flush=True)
