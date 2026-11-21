@@ -907,7 +907,8 @@ Scope {
             Quickshell.execDetached(["sh", "-c", 'sleep 0.25; swaymsg -t send_tick "tile $1" >/dev/null 2>&1', "sh", tl[1]]);
             return;
         }
-        Quickshell.execDetached(["sh", "-c", 'sleep 0.25; swaymsg "$1" >/dev/null 2>&1', "sh", row.cmd]);
+        // The tick lets the tiler see changes that raise no Sway event (a resize, for one).
+        Quickshell.execDetached(["sh", "-c", 'sleep 0.25; swaymsg "$1" >/dev/null 2>&1; swaymsg -t send_tick "tile sync" >/dev/null 2>&1', "sh", row.cmd]);
     }
 
     function moveKey(delta) {

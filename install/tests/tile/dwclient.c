@@ -1,7 +1,9 @@
 // Minimal xdg-shell client for the tiling stress test.
-// Usage: dwclient APP_ID TITLE [fixed]. "fixed" sets min = max size, which Sway floats.
+// Usage: dwclient APP_ID TITLE [fixed]. "fixed" sets min = max size, which Sway floats. Prints
+//        "c WIDTH HEIGHT" for every configure; a line on stdin changes the title.
 //        dwclient --pointer: adds a virtual pointer to the seat so "seat - cursor" can drag.
 #define _GNU_SOURCE
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -64,6 +66,9 @@ static int conf_w, conf_h;
 // The buffer fills the configured size so pointer input lands on the window.
 static void surface_configure(void *data, struct xdg_surface *xs, uint32_t serial) {
     xdg_surface_ack_configure(xs, serial);
+    // One line per configure lets the test count how often a window is resized.
+    printf("c %d %d\n", conf_w, conf_h);
+    fflush(stdout);
     int w = fixed_size ? 400 : conf_w > 0 ? conf_w : 320, h = fixed_size ? 300 : conf_h > 0 ? conf_h : 240;
     if (w > 4096)
         w = 4096;
@@ -138,8 +143,26 @@ int main(int argc, char **argv) {
         xdg_toplevel_set_max_size(top, 400, 300);
     }
     wl_surface_commit(surface);
-    while (running && wl_display_dispatch(display) != -1)
-        ;
+    // Every line on stdin changes the title, as a terminal does when its directory changes.
+    struct pollfd p[2] = {{wl_display_get_fd(display), POLLIN, 0}, {0, POLLIN, 0}};
+    int titles = 0;
+    while (running) {
+        wl_display_flush(display);
+        if (poll(p, 2, -1) < 0)
+            break;
+        if (p[1].revents) {
+            char line[64], title[96];
+            if (read(0, line, sizeof line) <= 0) {
+                p[1].fd = -1;
+            } else {
+                snprintf(title, sizeof title, "%s #%d", argv[2], ++titles);
+                xdg_toplevel_set_title(top, title);
+                wl_surface_commit(surface);
+            }
+        }
+        if (p[0].revents && wl_display_dispatch(display) == -1)
+            break;
+    }
     wl_display_disconnect(display);
     return 0;
 }

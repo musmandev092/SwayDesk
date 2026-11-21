@@ -15,6 +15,10 @@ if [ "$(id -u)" -eq 0 ]; then
     [ "$*" = system ] || { echo "Run apply.sh as your user (as root only: apply.sh system)." >&2; exit 1; }
     SUDO=""
 fi
+# Others must not be able to change what runs from here (often with sudo).
+if [ -n "$(find "$HERE" -perm /022 ! -type l -print -quit 2>/dev/null)" ]; then
+    chmod -R go-w "$HERE" 2>/dev/null || true
+fi
 
 BACKUP=/var/backups/swaydesk
 sys_put() {
@@ -189,11 +193,20 @@ do_system() {
         else note "sshd: could not disable"; fi
     else done_ "sshd off"; fi
 
-    # Firewall: LocalSend open, no web ports
+    # No LLMNR answers or queries (name spoofing on shared networks); kernel addresses hidden from users
+    if sys_put "$HERE/etc/systemd/resolved.conf.d/40-swaydesk.conf" /etc/systemd/resolved.conf.d/40-swaydesk.conf; then
+        $SUDO systemctl try-restart systemd-resolved 2>/dev/null || true
+    fi
+    if sys_put "$HERE/etc/sysctl.d/40-swaydesk.conf" /etc/sysctl.d/40-swaydesk.conf; then
+        $SUDO sysctl -q -p /etc/sysctl.d/40-swaydesk.conf 2>/dev/null || true
+    fi
+
+    # Firewall: LocalSend open, no web ports, no mDNS (nothing here answers it)
     FW=(firewall-cmd --permanent); FW_CHANGED=0
     $SUDO firewall-cmd --state >/dev/null 2>&1 || FW=(firewall-offline-cmd)
     fw_set remove service http
     fw_set remove service https
+    fw_set remove service mdns
     fw_set remove rich-rule 'rule service name="ssh" accept limit value="6/m"'
     fw_set add port 53317/tcp
     fw_set add port 53317/udp
@@ -227,21 +240,6 @@ link() {
     [ -e "$dst" ] || [ -L "$dst" ] && mv "$dst" "$dst.bak.$(date +%s)"
     ln -s "$src" "$dst"
     done_ "~/$2 -> SwayDesk (linked)"
-}
-
-# Master-stack tiler (src/swaydesk-tile), built into ~/.local/bin when the source is newer.
-build_tile() {
-    local bin="$HOME/.local/bin/swaydesk-tile" src="$HERE/src/swaydesk-tile" tmp
-    if [ -x "$bin" ] && [ "$bin" -nt "$src/main.c" ]; then done_ "swaydesk-tile"; return; fi
-    if ! command -v cc >/dev/null || ! command -v make >/dev/null || ! pkg-config --exists json-c 2>/dev/null; then
-        note "swaydesk-tile not built: needs gcc make json-c-devel"
-        return
-    fi
-    tmp=$(mktemp -d)
-    if cp "$src/main.c" "$src/Makefile" "$tmp/" && make -s -C "$tmp" install PREFIX="$HOME/.local" >/dev/null; then
-        done_ "swaydesk-tile (built)"
-    else note "swaydesk-tile build failed"; fi
-    rm -rf "$tmp"
 }
 
 do_home() {
@@ -339,7 +337,7 @@ PYEOF
         fi
     done
 
-    build_tile
+    link home/.local/bin/swaydesk-tile .local/bin/swaydesk-tile
     link home/.local/bin/sway-keys .local/bin/sway-keys
     link home/.local/bin/ptyxis-e .local/bin/ptyxis-e
     link home/.local/bin/sway-colors-apply .local/bin/sway-colors-apply

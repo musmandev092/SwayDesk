@@ -35,6 +35,7 @@
 #define MFACT_DEFAULT 0.5
 #define TAIL "_swaydesk_tail"
 #define FIT_DELAY_MS 60
+#define LOOK_MS 1000
 #define NONE SIZE_MAX
 #define MARK "_swaydesk_tile"
 #define PREFIX_BINDING "nop tile "
@@ -87,10 +88,10 @@ struct tree {
 	size_t nf, fcap;
 	struct workspace *ws;
 	size_t nws, wscap;
-	int64_t focused;
-	bool focus_floating, focus_window, global_fullscreen;
+	int64_t focused, tail;
+	bool focus_floating, focus_window, focus_hidden, global_fullscreen;
 	size_t focus_wsi;
-	struct ids hidden_fullscreen;
+	struct ids hidden_fullscreen, floating, floating_ws;
 };
 
 struct list {
@@ -100,9 +101,9 @@ struct list {
 
 struct state {
 	int64_t ws;
-	bool live, automatic, tainted;
+	bool live, automatic, tainted, stale;
 	double mfact;
-	struct ids known;
+	struct ids known, floating;
 };
 
 struct buf {
@@ -118,10 +119,9 @@ struct msg {
 static int cmd_fd = -1, ev_fd = -1;
 static struct state *states;
 static size_t nstates, cstates;
-static struct ids mru, fit_ids;
+static struct ids mru, fit_ids, immune;
 static struct timespec fit_at;
-static bool fit_pending, quit, debug;
-static int64_t tail_on;
+static bool fit_pending, quit, debug, again;
 
 static void fail(const char *what)
 {
@@ -413,32 +413,43 @@ static size_t new_node(struct tree *t)
 	return t->nn++;
 }
 
-static void scan_floating_focus(struct tree *t, json_object *o, size_t wsi, int depth)
+// The tail mark is read from the tree, so a lost or stale mark is repaired on the next pass.
+static void scan_tail(struct tree *t, json_object *o)
+{
+	json_object *marks = jget(o, "marks");
+	for (size_t i = 0; i < jlen(marks); i++) {
+		json_object *m = json_object_array_get_idx(marks, i);
+		if (json_object_is_type(m, json_type_string) && !strcmp(json_object_get_string(m), TAIL))
+			t->tail = jint(o, "id", 0);
+	}
+}
+
+// Nodes outside the tiled tree: the floating ones of a workspace, or the scratchpad (wsi NONE). A
+// fullscreen window hidden there leaves its workspace in a state where a focus aborts Sway 1.12.
+static void scan(struct tree *t, json_object *o, size_t wsi, int depth)
 {
 	if (depth > MAX_DEPTH || !json_object_is_type(o, json_type_object))
 		return;
-	if (jbool(o, "focused")) {
-		t->focused = jint(o, "id", 0);
-		t->focus_floating = true;
-		t->focus_window = true;
-		t->focus_wsi = wsi;
+	int64_t id = jint(o, "id", 0);
+	bool fullscreen = jint(o, "fullscreen_mode", 0) > 0;
+	scan_tail(t, o);
+	if (wsi == NONE) {
+		t->focus_hidden = t->focus_hidden || jbool(o, "focused");
+		if (fullscreen)
+			ids_push(&t->hidden_fullscreen, id);
+	} else {
+		t->ws[wsi].busy = t->ws[wsi].busy || fullscreen;
+		ids_push(&t->floating, id);
+		ids_push(&t->floating_ws, (int64_t)wsi);
+		if (jbool(o, "focused")) {
+			t->focused = id;
+			t->focus_floating = t->focus_window = true;
+			t->focus_wsi = wsi;
+		}
 	}
 	json_object *nodes = jget(o, "nodes");
 	for (size_t i = 0; i < jlen(nodes); i++)
-		scan_floating_focus(t, json_object_array_get_idx(nodes, i), wsi, depth + 1);
-}
-
-// A fullscreen window inside a container sent to the scratchpad keeps its workspace marked as
-// having a fullscreen window (Sway 1.12); focusing a window there later aborts Sway.
-static void scan_hidden_fullscreen(struct tree *t, json_object *o, int depth)
-{
-	if (depth > MAX_DEPTH || !json_object_is_type(o, json_type_object))
-		return;
-	if (jint(o, "fullscreen_mode", 0) > 0)
-		ids_push(&t->hidden_fullscreen, jint(o, "id", 0));
-	json_object *nodes = jget(o, "nodes");
-	for (size_t i = 0; i < jlen(nodes); i++)
-		scan_hidden_fullscreen(t, json_object_array_get_idx(nodes, i), depth + 1);
+		scan(t, json_object_array_get_idx(nodes, i), wsi, depth + 1);
 }
 
 static void walk(struct tree *t, json_object *o, size_t parent, size_t wsi, struct rect output, int depth);
@@ -470,10 +481,12 @@ static void walk(struct tree *t, json_object *o, size_t parent, size_t wsi, stru
 		return;
 	if (!strcmp(type, "root") || !strcmp(type, "output")) {
 		if (!strcmp(type, "output")) {
+			// The output "__i3" only holds the scratchpad.
 			const char *name = jstr(o, "name");
-			if (!name || !strcmp(name, "__i3"))
+			if (!name)
 				return;
-			output = jrect(jget(o, "rect"));
+			if (strcmp(name, "__i3"))
+				output = jrect(jget(o, "rect"));
 		}
 		for (size_t i = 0; i < jlen(nodes); i++)
 			walk(t, json_object_array_get_idx(nodes, i), NONE, NONE, output, depth + 1);
@@ -486,7 +499,7 @@ static void walk(struct tree *t, json_object *o, size_t parent, size_t wsi, stru
 		if (!strcmp(name, "__i3_scratch")) {
 			json_object *fl = jget(o, "floating_nodes");
 			for (size_t k = 0; k < jlen(fl); k++)
-				scan_hidden_fullscreen(t, json_object_array_get_idx(fl, k), depth + 1);
+				scan(t, json_object_array_get_idx(fl, k), NONE, depth + 1);
 			return;
 		}
 		size_t i = new_node(t);
@@ -526,9 +539,7 @@ static void walk(struct tree *t, json_object *o, size_t parent, size_t wsi, stru
 			x->rect = jrect(jget(f, "rect"));
 			x->window = jrect(jget(f, "window_rect"));
 			x->geometry = jrect(jget(f, "geometry"));
-			if (x->fullscreen > 0)
-				t->ws[w].busy = true;
-			scan_floating_focus(t, f, w, depth + 1);
+			scan(t, f, w, depth + 1);
 		}
 		return;
 	}
@@ -541,6 +552,7 @@ static void walk(struct tree *t, json_object *o, size_t parent, size_t wsi, stru
 		t->n[i].wsi = wsi;
 		t->n[i].fullscreen = (int)jint(o, "fullscreen_mode", 0);
 		t->n[i].rect = jrect(jget(o, "rect"));
+		scan_tail(t, o);
 		if (t->n[i].fullscreen > 0)
 			t->ws[wsi].busy = true;
 		if (t->n[i].fullscreen > 1)
@@ -562,6 +574,8 @@ static void tree_free(struct tree *t)
 	free(t->fl);
 	free(t->ws);
 	free(t->hidden_fullscreen.v);
+	free(t->floating.v);
+	free(t->floating_ws.v);
 	memset(t, 0, sizeof *t);
 }
 
@@ -673,149 +687,177 @@ static void sizes(struct buf *b, const struct tree *t, const struct list *o, dou
 		op(b, t, o->v[i], " tiling", "resize set height %d ppt", (int)(100 / k));
 }
 
-static double absd(double d)
+// The master's share of the width in a master-stack, or 0.
+static double share(const struct tree *t, size_t root)
 {
-	return d < 0 ? -d : d;
+	if (t->n[root].count != 2 || t->n[root].rect.w <= 0)
+		return 0;
+	return (double)t->n[collapse(t, child(t, root, 0))].rect.w / (double)t->n[root].rect.w;
 }
 
 // Whether the master width or the stack heights are off; resizing to what is already there would
 // only make every window redraw.
 static bool sizes_off(const struct tree *t, size_t root, const struct list *v, double mfact)
 {
-	if (v->len < 2 || t->n[root].count != 2 || t->n[root].rect.w <= 0)
+	double f = share(t, root);
+	if (v->len < 2 || f <= 0)
 		return false;
-	size_t m = collapse(t, child(t, root, 0)), s = child(t, root, 1);
-	if (absd((double)t->n[m].rect.w / (double)t->n[root].rect.w - mfact) > 0.02)
+	if (f - mfact > 0.02 || f - mfact < -0.02)
 		return true;
-	size_t k = v->len - 1;
-	double share = (double)t->n[s].rect.h / (double)k;
-	for (size_t i = 1; k >= 2 && i < v->len; i++)
-		if (absd((double)t->n[v->v[i]].rect.h - share) > (double)t->n[s].rect.h * 0.04)
-			return true;
-	return false;
+	size_t s = child(t, root, 1);
+	// Title bars and gaps differ per output, so the stack windows are compared with each other.
+	int low = INT_MAX, high = 0;
+	for (size_t i = 1; i < v->len; i++) {
+		int h = t->n[v->v[i]].rect.h;
+		low = h < low ? h : low;
+		high = h > high ? h : high;
+	}
+	return (double)(high - low) > (double)t->n[s].rect.h * 0.04;
 }
 
 // One-child containers around windows go ("split none" flattens a window's one-child parents).
-static void tidy(struct buf *b, const struct tree *t, const struct list *v)
+static void unwrap(struct buf *b, const struct tree *t, const struct list *v, size_t skip)
 {
 	for (size_t i = 0; i < v->len; i++) {
 		size_t p = t->n[v->v[i]].parent;
-		if (p != NONE && t->n[p].kind == K_CON && t->n[p].count == 1)
+		if (v->v[i] != skip && p != NONE && t->n[p].kind == K_CON && t->n[p].count == 1)
 			op(b, t, v->v[i], " tiling", "split none");
 	}
 }
 
-// Master-stack keeps its stack container even around a single window, so a new window can be put
-// at the end of the stack before it is first drawn; only other one-child wrappers go.
-static void tidy_master(struct buf *b, const struct tree *t, size_t root, const struct list *v)
+// A lone window loses old wrappers once the window set changed, and a vertical parent turns
+// horizontal ("split h" on an only child sets the parent's layout) so the next window opens beside it.
+static void single(struct buf *b, const struct tree *t, size_t ws, const struct list *v, bool changed)
 {
-	size_t stack = child(t, root, 1);
-	if (t->n[stack].kind == K_VIEW) {
-		op(b, t, stack, " tiling", "split v");
-		stack = NONE;
-	}
-	for (size_t i = 0; i < v->len; i++) {
-		size_t p = t->n[v->v[i]].parent;
-		if (p != NONE && p != stack && t->n[p].kind == K_CON && t->n[p].count == 1)
-			op(b, t, v->v[i], " tiling", "split none");
-	}
+	size_t w = v->v[0], p = t->n[w].parent;
+	if (v->len != 1 || p == NONE)
+		return;
+	bool flat = changed && p != ws && t->n[p].count == 1;
+	enum layout l = flat ? t->n[ws].layout : t->n[p].layout;
+	if (flat || l == L_SPLITV)
+		op(b, t, w, " tiling", "%s%s%s", flat ? "split none" : "", flat && l == L_SPLITV ? ", " : "", l == L_SPLITV ? "split h" : "");
 }
 
-// Moves every window of the workspace, in order, into one parent: the workspace itself when the
-// first window is a direct child of it, else the workspace's direct child holding that window.
+// A single stack window keeps a vertical container, where the next window goes before it is first
+// drawn. Sway gives a new one half the width; returns whether another master width has to be set.
+static bool stack_wrap(struct buf *b, const struct tree *t, size_t root, const struct list *v, double mfact)
+{
+	size_t w = v->len == 2 ? v->v[1] : NONE, p = w == NONE ? NONE : t->n[w].parent;
+	if (p == NONE || (t->n[p].parent == root && t->n[p].layout == L_SPLITV && t->n[p].count == 1))
+		return false;
+	op(b, t, w, " tiling", p == root || t->n[p].count > 1 ? "split v" : "split none, split v");
+	return percent(mfact) != 50;
+}
+
+// The lone stack window keeps its container; other one-child wrappers go.
+static bool tidy_master(struct buf *b, const struct tree *t, size_t root, const struct list *v, double mfact)
+{
+	bool wrapped = stack_wrap(b, t, root, v, mfact);
+	unwrap(b, t, v, v->len == 2 ? v->v[1] : NONE);
+	return wrapped;
+}
+
+static bool in_order(const struct tree *t, size_t p, const struct list *o)
+{
+	if (t->n[p].count != o->len)
+		return false;
+	for (size_t i = 0; i < o->len; i++)
+		if (child(t, p, i) != o->v[i])
+			return false;
+	return true;
+}
+
+// Moves the windows o[from..], in order, into the container dest or behind the window dest.
+static void move_to(struct buf *b, const struct tree *t, size_t dest, const struct list *o, size_t from)
+{
+	bool into = t->n[dest].kind != K_VIEW;
+	if (from >= o->len)
+		return;
+	op(b, t, dest, into ? "" : " tiling", "mark --add " MARK);
+	for (size_t i = from; i < o->len; i++) {
+		op(b, t, o->v[i], " tiling", "move container to mark " MARK);
+		if (!into)
+			op(b, t, o->v[i], " tiling", "mark --add " MARK);
+	}
+	raw(b, "unmark " MARK);
+}
+
+// Moves every window, in order, into one parent unless they are there already: the workspace when
+// the first window is a direct child of it, else the workspace's direct child holding that window.
 static size_t gather(struct buf *b, const struct tree *t, size_t ws, const struct list *o)
 {
-	size_t w0 = o->v[0];
-	if (t->n[w0].parent == ws) {
-		op(b, t, w0, " tiling", "mark --add " MARK);
-		for (size_t i = 1; i < o->len; i++) {
-			op(b, t, o->v[i], " tiling", "move container to mark " MARK);
-			op(b, t, o->v[i], " tiling", "mark --add " MARK);
-		}
-		raw(b, "unmark " MARK);
-		return ws;
-	}
-	size_t top = w0;
+	size_t top = o->v[0];
 	while (t->n[top].parent != ws && t->n[top].parent != NONE)
 		top = t->n[top].parent;
-	op(b, t, top, "", "mark --add " MARK);
-	for (size_t i = 0; i < o->len; i++)
-		op(b, t, o->v[i], " tiling", "move container to mark " MARK);
-	raw(b, "unmark " MARK);
-	return top;
+	bool direct = top == o->v[0];
+	if (!in_order(t, direct ? ws : top, o))
+		move_to(b, t, top, o, direct);
+	return direct ? ws : top;
 }
 
-// A workspace's own layout is set through focus; "layout" on one of its direct children would wrap them.
-static void set_layout(struct buf *b, const struct tree *t, size_t ws, size_t top, size_t w0, const char *layout)
+// "layout" on a direct child of the workspace wraps its windows in a container with that layout. A
+// tabbed workspace (a second tab bar) is changed itself, through focus; returns whether focus moved.
+static bool set_layout(struct buf *b, const struct tree *t, size_t wsi, size_t top, size_t w0, enum layout target)
 {
-	if (top == ws) {
-		if (parse_layout(layout) == t->n[ws].layout)
-			return;
-		op(b, t, w0, " tiling", "focus");
-		raw(b, "focus parent");
-		sep(b);
-		buf_add(b, "layout %s", layout);
-		return;
-	}
-	op(b, t, w0, " tiling", "layout %s", layout);
+	size_t ws = t->ws[wsi].node;
 	enum layout wl = t->n[ws].layout;
-	if (wl == L_TABBED || wl == L_STACKED) {
-		op(b, t, top, "", "focus");
-		raw(b, "focus parent");
-		raw(b, "layout splith");
-	}
+	const char *name = target == L_TABBED ? "tabbed" : "splith";
+	bool back = !t->focused || t->focus_window || t->focus_wsi == wsi || (t->focus_wsi < t->nws && t->ws[t->focus_wsi].safe);
+	bool detour = (wl == L_TABBED || wl == L_STACKED) && back;
+	if (top == ws && wl == target)
+		return false;
+	if (top != ws || !detour)
+		op(b, t, w0, " tiling", "layout %s", name);
+	if (!detour)
+		return false;
+	op(b, t, top == ws ? w0 : top, top == ws ? " tiling" : "", "focus");
+	raw(b, "focus parent");
+	sep(b);
+	buf_add(b, "layout %s", top == ws ? name : "splith");
+	return true;
 }
 
 static size_t current(const struct tree *t, const struct list *v);
 
-// Focus ends on a window: the one that had it, or, when a container of this workspace had it (our
-// "focus parent" may have moved it there), the workspace's last focused window.
-static void refocus(struct buf *b, const struct tree *t, size_t wsi, const struct list *v)
+// Focus ends on a window: the one that had it, or the workspace's last focused window when a
+// container of this workspace had it. A detour from another workspace goes back there.
+static void refocus(struct buf *b, const struct tree *t, size_t wsi, const struct list *v, bool moved)
 {
-	if (!t->focused)
+	if (!t->focused || (t->focus_wsi != wsi && !moved))
 		return;
 	if (t->focus_window) {
 		sep(b);
 		buf_add(b, "[con_id=%lld] focus", (long long)t->focused);
-		return;
-	}
-	if (t->focus_wsi == wsi && v->len) {
+	} else if (t->focus_wsi == wsi && v->len) {
 		op(b, t, v->v[current(t, v)], " tiling", "focus");
-		return;
-	}
-	if (t->focus_wsi < t->nws && t->ws[t->focus_wsi].safe) {
+	} else if (t->focus_wsi < t->nws && t->ws[t->focus_wsi].safe) {
 		sep(b);
-		buf_add(b, "workspace \"%s\"", t->ws[t->focus_wsi].name);
+		buf_add(b, "workspace --no-auto-back-and-forth \"%s\"", t->ws[t->focus_wsi].name);
 	}
 }
 
-static void build_master(struct buf *b, const struct tree *t, size_t wsi, const struct list *o, double mfact)
+static void build_master(struct buf *b, struct buf *z, const struct tree *t, size_t wsi, const struct list *o, double mfact)
 {
 	size_t ws = t->ws[wsi].node;
 	if (o->len < 2) {
-		tidy(b, t, o);
+		if (o->len)
+			single(b, t, ws, o, true);
 		return;
 	}
 	size_t top = gather(b, t, ws, o);
-	set_layout(b, t, ws, top, o->v[0], "splith");
-	if (o->len >= 2) {
-		op(b, t, o->v[1], " tiling", "mark --add " MARK ", fullscreen disable, split v");
-		for (size_t i = 2; i < o->len; i++) {
-			op(b, t, o->v[i], " tiling", "move container to mark " MARK);
-			op(b, t, o->v[i], " tiling", "mark --add " MARK);
-		}
-		raw(b, "unmark " MARK);
-	}
-	sizes(b, t, o, mfact);
-	refocus(b, t, wsi, o);
+	bool moved = set_layout(b, t, wsi, top, o->v[0], L_SPLITH);
+	op(b, t, o->v[1], " tiling", "fullscreen disable, split v");
+	move_to(b, t, o->v[1], o, 2);
+	refocus(b, t, wsi, o, moved);
+	sizes(z, t, o, mfact);
 }
 
 static void build_monocle(struct buf *b, const struct tree *t, size_t wsi, const struct list *o)
 {
 	size_t ws = t->ws[wsi].node;
 	size_t top = gather(b, t, ws, o);
-	set_layout(b, t, ws, top, o->v[0], "tabbed");
-	refocus(b, t, wsi, o);
+	bool moved = set_layout(b, t, wsi, top, o->v[0], L_TABBED);
+	refocus(b, t, wsi, o, moved);
 }
 
 // A floating window back from the scratchpad, floated or out of fullscreen that is larger than 90%
@@ -843,6 +885,8 @@ static void fit(struct buf *b, const struct tree *t)
 		if (h > o.h * 9 / 10)
 			h = o.h * 9 / 10;
 		bool off = r.x < o.x || r.y < o.y || r.x + r.w > o.x + o.w || r.y + r.h > o.y + o.h;
+		if (w < 1 || h < 1)
+			continue;
 		if (w < r.w - 2 || h < r.h - 2) {
 			sep(b);
 			buf_add(b, "[con_id=%lld floating] resize set width %d px height %d px, move position center", (long long)f->id, w, h);
@@ -883,6 +927,7 @@ static void states_prune(void)
 			states[k++] = states[i];
 		} else {
 			free(states[i].known.v);
+			free(states[i].floating.v);
 		}
 	}
 	nstates = k;
@@ -916,10 +961,7 @@ static bool same_order(const struct list *a, const struct list *b)
 
 static void capture_mfact(struct state *s, const struct tree *t, size_t root)
 {
-	if (t->n[root].count != 2 || t->n[root].rect.w <= 0)
-		return;
-	size_t m = collapse(t, child(t, root, 0));
-	double f = (double)t->n[m].rect.w / (double)t->n[root].rect.w;
+	double f = share(t, root);
 	if (f >= 0.1 && f <= 0.9)
 		s->mfact = f;
 }
@@ -937,18 +979,114 @@ static size_t current(const struct tree *t, const struct list *v)
 	return 0;
 }
 
-static void run_action(struct buf *b, const struct tree *t, size_t wsi, enum action act, const struct list *v, enum shape sh, struct state *s)
+// Takes the windows not yet known, and containers left empty by that, out of their parents (cut
+// gets node and position pairs).
+static void prune(struct tree *t, const struct list *v, const struct ids *known, struct list *cut)
+{
+	for (size_t i = 0; i < v->len; i++) {
+		size_t x = v->v[i];
+		if (ids_has(known, t->n[x].id))
+			continue;
+		for (size_t p = t->n[x].parent; p != NONE; x = p, p = t->n[x].parent) {
+			size_t *k = t->kids + t->n[p].first, n = t->n[p].count, at = 0;
+			while (at < n && k[at] != x)
+				at++;
+			if (at == n)
+				break;
+			memmove(k + at, k + at + 1, (n - at - 1) * sizeof *k);
+			t->n[p].count--;
+			list_push(cut, x);
+			list_push(cut, at);
+			if (t->n[p].count || t->n[p].kind != K_CON)
+				break;
+		}
+	}
+}
+
+static void restore(struct tree *t, const struct list *cut)
+{
+	for (size_t i = cut->len; i >= 2; i -= 2) {
+		size_t x = cut->v[i - 2], at = cut->v[i - 1], p = t->n[x].parent;
+		size_t *k = t->kids + t->n[p].first;
+		memmove(k + at + 1, k + at, (t->n[p].count - at) * sizeof *k);
+		k[at] = x;
+		t->n[p].count++;
+	}
+}
+
+// The windows changed and the workspace is untidy. Those that were there before tell why: tidy, so
+// new ones go to the end; a closed master's stack, so its first window moves out; else by hand (false).
+static bool place(struct buf *b, struct buf *z, struct tree *t, size_t wsi, const struct list *v, const struct list *want, const struct state *s, size_t *last)
+{
+	size_t ws = t->ws[wsi].node, r;
+	struct list cut = { 0 }, was = { 0 };
+	prune(t, v, &s->known, &cut);
+	collect(t, ws, &was);
+	enum shape sh = classify(t, ws, &was, &r);
+	size_t p = t->n[r].parent, n = was.len;
+	bool orphan = sh == S_MANUAL && r != ws && t->n[r].layout == L_SPLITV && all_views(t, r);
+	bool promote = orphan && !cut.len && p == ws && t->n[p].layout == L_SPLITH && in_order(t, r, v);
+	// New windows go into the stack container or the tab group, else behind the lone stack window
+	// or, in a tabbed workspace, a tab that is its direct child.
+	size_t into = sh == S_MASTER ? (n > 2 ? collapse(t, child(t, r, 1)) : NONE) : r != ws ? r : NONE;
+	size_t after = n ? was.v[n - 1] : NONE;
+	for (size_t i = n; sh == S_MONOCLE && i-- > 0 && t->n[after].parent != r;)
+		after = was.v[i];
+	restore(t, &cut);
+	bool ok = true;
+	if (s->stale || n < 2 || (orphan && !promote)) {
+		build_master(b, z, t, wsi, want, s->mfact);
+	} else if (sh == S_MASTER || sh == S_MONOCLE) {
+		if (sh == S_MASTER && stack_wrap(b, t, r, &was, s->mfact))
+			sizes(z, t, &was, s->mfact);
+		move_to(b, t, into != NONE ? into : after, want, n);
+		if (sh == S_MONOCLE)
+			*last = NONE;
+		refocus(b, t, wsi, v, false);
+	} else if (promote) {
+		op(b, t, v->v[0], " tiling", "move left");
+		refocus(b, t, wsi, v, false);
+		sizes(z, t, v, s->mfact);
+	} else {
+		ok = false;
+	}
+	free(cut.v);
+	free(was.v);
+	return ok;
+}
+
+// Keeps a tidy workspace ready for the next window.
+static void tidy(struct buf *b, struct buf *z, const struct tree *t, size_t ws, size_t root, const struct list *v, enum shape sh, struct state *s, bool changed)
+{
+	if (sh == S_SINGLE) {
+		single(b, t, ws, v, changed);
+	} else if (sh == S_MONOCLE) {
+		unwrap(b, t, v, NONE);
+	} else if (sh == S_MASTER) {
+		capture_mfact(s, t, root);
+		if (tidy_master(b, t, root, v, s->mfact))
+			sizes(z, t, v, s->mfact);
+	}
+}
+
+static void run_action(struct buf *b, struct buf *z, const struct tree *t, size_t wsi, enum action act, const struct list *v, enum shape sh, size_t root, struct state *s)
 {
 	size_t n = v->len;
 	size_t f = current(t, v);
 	switch (act) {
 	case A_RETILE:
-		build_master(b, t, wsi, v, s->mfact);
+		if (sh == S_MASTER) {
+			capture_mfact(s, t, root);
+			if (tidy_master(b, t, root, v, s->mfact) || sizes_off(t, root, v, s->mfact))
+				sizes(z, t, v, s->mfact);
+		} else {
+			build_master(b, z, t, wsi, v, s->mfact);
+		}
 		s->automatic = true;
 		break;
 	case A_MONOCLE:
 		if (sh == S_MONOCLE)
-			build_master(b, t, wsi, v, s->mfact);
+			build_master(b, z, t, wsi, v, s->mfact);
 		else if (n >= 2)
 			build_monocle(b, t, wsi, v);
 		s->automatic = true;
@@ -956,12 +1094,7 @@ static void run_action(struct buf *b, const struct tree *t, size_t wsi, enum act
 	case A_ZOOM:
 		if (n < 2)
 			break;
-		if (f == 0) {
-			op(b, t, v->v[0], " tiling", "swap container with con_id %lld", (long long)t->n[v->v[1]].id);
-			op(b, t, v->v[1], " tiling", "focus");
-		} else {
-			op(b, t, v->v[f], " tiling", "swap container with con_id %lld, focus", (long long)t->n[v->v[0]].id);
-		}
+		op(b, t, v->v[f ? f : 1], " tiling", "swap container with con_id %lld, focus", (long long)t->n[v->v[0]].id);
 		break;
 	case A_FOCUS_NEXT:
 	case A_FOCUS_PREV:
@@ -982,39 +1115,6 @@ static void run_action(struct buf *b, const struct tree *t, size_t wsi, enum act
 	}
 }
 
-// The last stack window once an action's commands have run (none unless the result is master-stack).
-static size_t tail_after(const struct tree *t, enum action act, const struct list *v, enum shape sh)
-{
-	size_t n = v->len, f = current(t, v);
-	if (n < 2)
-		return NONE;
-	switch (act) {
-	case A_RETILE:
-		return v->v[n - 1];
-	case A_MONOCLE:
-		return sh == S_MONOCLE ? v->v[n - 1] : NONE;
-	case A_ZOOM: {
-		size_t a = f == 0 ? 1 : f;
-		if (sh != S_MASTER)
-			return NONE;
-		return a == n - 1 ? v->v[0] : v->v[n - 1];
-	}
-	case A_SWAP_NEXT:
-	case A_SWAP_PREV: {
-		size_t g = act == A_SWAP_NEXT ? (f + 1) % n : (f + n - 1) % n;
-		if (sh != S_MASTER)
-			return NONE;
-		return f == n - 1 ? v->v[g] : g == n - 1 ? v->v[f] : v->v[n - 1];
-	}
-	case A_FOCUS_NEXT:
-	case A_FOCUS_PREV:
-		return sh == S_MASTER ? v->v[n - 1] : NONE;
-	case A_NONE:
-		break;
-	}
-	return NONE;
-}
-
 static bool run_commands(struct buf *b)
 {
 	if (!b->len)
@@ -1026,16 +1126,17 @@ static bool run_commands(struct buf *b)
 		return false;
 	json_object *r = parse_json(m.data, m.len);
 	const char *c = b->p;
+	// Sway answers once per command; commands are separated by ";" or ",".
 	for (size_t i = 0; i < jlen(r); i++) {
 		json_object *e = json_object_array_get_idx(r, i);
-		const char *end = strstr(c, "; ");
-		int len = end ? (int)(end - c) : (int)strlen(c);
+		size_t len = strcspn(c, ";,");
 		if (!jbool(e, "success")) {
 			const char *err = jstr(e, "error");
-			fprintf(stderr, "swaydesk-tile: command failed: %s (%.*s)\n", err ? err : "unknown error", len, c);
+			fprintf(stderr, "swaydesk-tile: command failed: %s (%.*s)\n", err ? err : "unknown error", (int)len, c);
+			again = true;
 		}
-		if (end)
-			c = end + 2;
+		c += len;
+		c += strspn(c, ";, ");
 	}
 	if (r)
 		json_object_put(r);
@@ -1050,7 +1151,8 @@ static bool refresh(enum action act)
 		tree_free(&t);
 		return false;
 	}
-	struct buf b = { 0 };
+	// Resizes go last: one that Sway rejects ends the batch.
+	struct buf b = { 0 }, z = { 0 };
 	struct list v = { 0 }, want = { 0 };
 	size_t tail = NONE;
 	for (size_t wsi = 0; wsi < t.nws; wsi++) {
@@ -1063,52 +1165,49 @@ static bool refresh(enum action act)
 		bool busy = t.global_fullscreen || t.ws[wsi].busy;
 		struct state *s = state_for(t.n[ws].id, &fresh);
 		for (size_t k = 0; k < t.hidden_fullscreen.len && !s->tainted; k++)
-			if (ids_has(&s->known, t.hidden_fullscreen.v[k])) {
+			if (ids_has(&s->known, t.hidden_fullscreen.v[k]) || ids_has(&s->floating, t.hidden_fullscreen.v[k])) {
 				s->tainted = true;
-				fprintf(stderr, "swaydesk-tile: workspace left alone until emptied (fullscreen window hidden in the scratchpad)\n");
+				fprintf(stderr, "swaydesk-tile: workspace %lld left alone until emptied (fullscreen window hidden in the scratchpad)\n", (long long)t.n[ws].id);
 			}
+		s->floating.len = 0;
+		for (size_t k = 0; k < t.floating.len; k++)
+			if (t.floating_ws.v[k] == (int64_t)wsi)
+				ids_push(&s->floating, t.floating.v[k]);
 		if (s->tainted || (busy && !fresh))
 			continue;
 		// The window that ends up last in the stack, when this is the focused automatic workspace.
-		size_t last = NONE;
+		size_t last = sh == S_MASTER ? v.v[v.len - 1] : NONE;
 		bool focused = wsi == t.focus_wsi;
-		if (act != A_NONE && focused && !busy) {
-			run_action(&b, &t, wsi, act, &v, sh, s);
-			last = tail_after(&t, act, &v, sh);
-		} else if (fresh) {
+		bool changed = s->stale || !same_set(&s->known, &t, &v);
+		if (act != A_NONE && focused && !busy && !fresh) {
+			// A re-tile settles every window; after other keys the plain pass still sees a change.
+			run_action(&b, &z, &t, wsi, act, &v, sh, root, s);
+			if (act != A_RETILE && act != A_MONOCLE)
+				continue;
+		} else if (fresh || !s->automatic) {
+			if (fresh || clean)
+				s->automatic = clean;
+			if (s->automatic && !busy)
+				tidy(&b, &z, &t, ws, root, &v, sh, s, !fresh);
+		} else if (!changed || sh == S_SINGLE || sh == S_MONOCLE || sh == S_EMPTY) {
+			// An untidy workspace whose windows are the same was arranged by hand.
 			s->automatic = clean;
-			if (sh == S_MASTER)
-				last = v.v[v.len - 1];
-		} else if (s->automatic) {
-			bool changed = !same_set(&s->known, &t, &v);
-			if (!changed) {
-				if (sh == S_MASTER) {
-					capture_mfact(s, &t, root);
-					if (t.n[child(&t, root, 1)].kind == K_VIEW)
-						tidy_master(&b, &t, root, &v);
-					last = v.v[v.len - 1];
-				} else if (!clean) {
-					s->automatic = false;
-				}
-			} else if (sh == S_SINGLE) {
-				tidy(&b, &t, &v);
-			} else if (sh != S_EMPTY && sh != S_MONOCLE) {
-				want.len = 0;
-				desired(&t, &v, &s->known, &want);
-				if (sh == S_MASTER && same_order(&v, &want)) {
-					tidy_master(&b, &t, root, &v);
-					if (sizes_off(&t, root, &v, s->mfact))
-						sizes(&b, &t, &v, s->mfact);
-				} else {
-					build_master(&b, &t, wsi, &want, s->mfact);
-				}
-				last = want.v[want.len - 1];
+			tidy(&b, &z, &t, ws, root, &v, sh, s, changed);
+		} else {
+			want.len = 0;
+			desired(&t, &v, &s->known, &want);
+			last = want.v[want.len - 1];
+			if (sh == S_MASTER && same_order(&v, &want)) {
+				// Sway shares the stack out by itself; only a new stack container needs a width.
+				if (tidy_master(&b, &t, root, &v, s->mfact))
+					sizes(&z, &t, &v, s->mfact);
+			} else if (!place(&b, &z, &t, wsi, &v, &want, s, &last)) {
+				s->automatic = false;
 			}
-		} else if (clean) {
-			s->automatic = true;
-			if (sh == S_MASTER)
-				last = v.v[v.len - 1];
 		}
+		s->stale = false;
+		if (!s->automatic)
+			last = NONE;
 		if (focused)
 			tail = last;
 		s->known.len = 0;
@@ -1116,18 +1215,61 @@ static bool refresh(enum action act)
 			ids_push(&s->known, t.n[v.v[i]].id);
 	}
 	states_prune();
-	// The Sway rule "for_window [tiling workspace=__focused__] move container to mark _swaydesk_tail"
-	// puts a new window there before it is first drawn.
-	int64_t want_tail = tail != NONE ? t.n[tail].id : 0;
-	if (want_tail && want_tail != tail_on)
-		op(&b, &t, tail, " tiling", "mark --add " TAIL);
-	else if (!want_tail && tail_on)
-		raw(&b, "unmark " TAIL);
-	tail_on = want_tail;
-	bool ok = run_commands(&b);
+	// Sway's for_window rule moves a new window to the mark. It also runs when a window it has not run
+	// on yet is marked or renamed: the mark is away during moves, and every window holds it once.
+	struct buf out = { 0 };
+	// Sway 1.12 can leave focus on a window hidden in the scratchpad and then aborts when a window
+	// opens (the rule's "workspace=__focused__"); focus goes to the window that had it last.
+	if (t.focus_hidden && !t.hidden_fullscreen.len) {
+		struct ids shown = { 0 };
+		for (size_t i = 0; i < t.nn; i++)
+			if (t.n[i].kind == K_VIEW)
+				ids_push(&shown, t.n[i].id);
+		for (size_t i = 0; i < t.floating.len; i++)
+			ids_push(&shown, t.floating.v[i]);
+		int64_t to = shown.len ? shown.v[0] : 0;
+		for (size_t m = 0; m < mru.len; m++)
+			if (ids_has(&shown, mru.v[m]))
+				to = mru.v[m];
+		if (to)
+			buf_add(&out, "[con_id=%lld] focus", (long long)to);
+		free(shown.v);
+	}
+	if (b.len && t.tail && strstr(b.p, "mark ")) {
+		raw(&out, "unmark " TAIL);
+		t.tail = 0;
+	}
+	if (b.len)
+		raw(&out, b.p);
+	if (act == A_NONE && tail != NONE) {
+		bool marked = t.tail == t.n[tail].id;
+		v.len = 0;
+		collect(&t, t.ws[t.focus_wsi].node, &v);
+		for (size_t i = 0; i < v.len && t.focus_window; i++) {
+			if (ids_has(&immune, t.n[v.v[i]].id))
+				continue;
+			ids_push(&immune, t.n[v.v[i]].id);
+			if (v.v[i] != tail) {
+				op(&out, &t, v.v[i], " tiling", "mark --add " TAIL);
+				marked = false;
+			}
+		}
+		if (!marked)
+			op(&out, &t, tail, " tiling", "mark --add " TAIL);
+	} else if (act == A_NONE && t.tail) {
+		raw(&out, "unmark " TAIL);
+	}
+	if (z.len)
+		raw(&out, z.p);
+	again = false;
+	bool ok = run_commands(&out);
+	free(out.p);
+	for (size_t i = 0; again && i < nstates; i++)
+		states[i].stale = true;
 	free(v.v);
 	free(want.v);
 	free(b.p);
+	free(z.p);
 	tree_free(&t);
 	return ok;
 }
@@ -1142,6 +1284,7 @@ static bool run_fit(void)
 	struct buf b = { 0 };
 	fit(&b, &t);
 	bool ok = run_commands(&b);
+	again = false;
 	free(b.p);
 	tree_free(&t);
 	fit_ids.len = 0;
@@ -1208,14 +1351,16 @@ static void on_event(const struct msg *m, bool *dirty, enum action *act)
 		quit = true;
 		return;
 	}
-	if (m->type == EV_WORKSPACE) {
-		*dirty = true;
-		return;
-	}
 	json_object *o = parse_json(m->data, m->len);
 	if (!o)
 		return;
-	if (m->type == EV_WINDOW) {
+	if (m->type == EV_WORKSPACE) {
+		const char *change = jstr(o, "change");
+		*dirty = true;
+		// A reload makes Sway run the placement rule on every window again.
+		if (change && !strcmp(change, "reload"))
+			immune.len = 0;
+	} else if (m->type == EV_WINDOW) {
 		const char *change = jstr(o, "change");
 		json_object *c = jget(o, "container");
 		int64_t id = jint(c, "id", 0);
@@ -1226,10 +1371,11 @@ static void on_event(const struct msg *m, bool *dirty, enum action *act)
 			mru_touch(id);
 		} else if (!strcmp(change, "close")) {
 			ids_remove(&mru, id);
+			ids_remove(&immune, id);
 			*dirty = true;
 		} else if (!strcmp(change, "new") || !strcmp(change, "move") || !strcmp(change, "floating") || !strcmp(change, "fullscreen_mode")) {
 			*dirty = true;
-			if (!strcmp(change, "move") || (!strcmp(change, "floating") && floating) || (!strcmp(change, "fullscreen_mode") && jint(c, "fullscreen_mode", 1) == 0))
+			if (floating && (strcmp(change, "fullscreen_mode") || jint(c, "fullscreen_mode", 1) == 0) && strcmp(change, "new"))
 				schedule_fit(id);
 		}
 	} else if (m->type == EV_BINDING) {
@@ -1240,8 +1386,12 @@ static void on_event(const struct msg *m, bool *dirty, enum action *act)
 			*dirty = true;
 	} else if (m->type == EV_TICK) {
 		const char *payload = jstr(o, "payload");
-		if (!jbool(o, "first") && payload && !strncmp(payload, PREFIX_TICK, strlen(PREFIX_TICK)))
+		// Any other "tile ..." tick asks for a look at the tree.
+		if (!jbool(o, "first") && payload && !strncmp(payload, PREFIX_TICK, strlen(PREFIX_TICK))) {
 			*act = parse_action(payload + strlen(PREFIX_TICK));
+			if (*act == A_NONE)
+				*dirty = true;
+		}
 	}
 	json_object_put(o);
 }
@@ -1265,6 +1415,18 @@ static bool subscribe(void)
 	return ok;
 }
 
+// A plain pass follows a key (it sets the mark) and a pass whose commands failed (a stale tree).
+static bool pass(enum action act)
+{
+	if (!refresh(act))
+		return false;
+	if (act == A_NONE && !again)
+		return true;
+	bool ok = refresh(A_NONE);
+	again = false;
+	return ok;
+}
+
 int main(int argc, char **argv)
 {
 	if (argc > 1) {
@@ -1284,17 +1446,19 @@ int main(int argc, char **argv)
 		fail("cannot connect to Sway");
 	if (!subscribe())
 		fail("cannot subscribe to Sway events");
-	if (!refresh(A_NONE))
+	if (!pass(A_NONE))
 		fail("cannot read the Sway tree");
 	while (!quit) {
 		struct pollfd p = { .fd = ev_fd, .events = POLLIN };
-		int r = poll(&p, 1, fit_pending ? ms_until(&fit_at) : -1);
+		// Sway raises no event for a mouse drag and some focus changes: a look once a second.
+		int wait = fit_pending ? ms_until(&fit_at) : LOOK_MS;
+		int r = poll(&p, 1, wait < LOOK_MS ? wait : LOOK_MS);
 		if (r < 0) {
 			if (errno == EINTR)
 				continue;
 			break;
 		}
-		bool dirty = false;
+		bool dirty = r == 0;
 		enum action act = A_NONE;
 		if (r > 0) {
 			if (!(p.revents & POLLIN))
@@ -1313,16 +1477,19 @@ int main(int argc, char **argv)
 		}
 		if (quit)
 			break;
-		if ((dirty || act != A_NONE) && !refresh(act))
+		if ((dirty || act != A_NONE) && !pass(act))
 			break;
 		if (fit_pending && ms_until(&fit_at) == 0 && !run_fit())
 			break;
 	}
 out:
-	for (size_t i = 0; i < nstates; i++)
+	for (size_t i = 0; i < nstates; i++) {
 		free(states[i].known.v);
+		free(states[i].floating.v);
+	}
 	free(states);
 	free(mru.v);
+	free(immune.v);
 	free(fit_ids.v);
 	close(cmd_fd);
 	close(ev_fd);

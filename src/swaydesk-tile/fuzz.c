@@ -16,7 +16,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	t.focus_wsi = NONE;
 	walk(&t, root, NONE, NONE, (struct rect){ 0, 0, 0, 0 }, 0);
 	json_object_put(root);
-	struct buf b = { 0 };
+	struct buf b = { 0 }, z = { 0 };
 	struct list v = { 0 }, want = { 0 };
 	struct ids known = { 0 };
 	for (size_t wsi = 0; wsi < t.nws; wsi++) {
@@ -28,14 +28,32 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		if (sh == S_MASTER)
 			capture_mfact(&s, &t, r);
 		if (v.len) {
-			ids_push(&known, t.n[v.v[0]].id);
-			want.len = 0;
-			desired(&t, &v, &known, &want);
-			build_master(&b, &t, wsi, &want, s.mfact);
+			// Known windows: none, the first, every second, all but the first, all.
+			for (size_t mode = 0; mode < 5; mode++) {
+				known.len = 0;
+				if (mode == 3)
+					ids_push(&known, -1);
+				for (size_t i = 0; i < v.len; i++)
+					if (mode == 4 || (mode == 1 && i == 0) || (mode == 2 && i % 2 == 0) || (mode == 3 && i > 0))
+						ids_push(&known, t.n[v.v[i]].id);
+				want.len = 0;
+				desired(&t, &v, &known, &want);
+				size_t last = NONE;
+				s.known = known;
+				place(&b, &z, &t, wsi, &v, &want, &s, &last);
+				build_master(&b, &z, &t, wsi, &want, s.mfact);
+			}
+			s.known = (struct ids){ 0 };
 			build_monocle(&b, &t, wsi, &v);
-			tidy(&b, &t, &v);
+			single(&b, &t, ws, &v, true);
+			single(&b, &t, ws, &v, false);
+			if (sh == S_MASTER) {
+				tidy_master(&b, &t, r, &v, s.mfact);
+				sizes_off(&t, r, &v, s.mfact);
+			}
 			for (enum action a = A_RETILE; a <= A_SWAP_PREV; a++)
-				run_action(&b, &t, wsi, a, &v, sh, &s);
+				run_action(&b, &z, &t, wsi, a, &v, sh, r, &s);
+			b.len = z.len = 0;
 		}
 		free(s.known.v);
 	}
@@ -44,6 +62,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	fit(&b, &t);
 	fit_ids.len = 0;
 	free(b.p);
+	free(z.p);
 	free(v.v);
 	free(want.v);
 	free(known.v);

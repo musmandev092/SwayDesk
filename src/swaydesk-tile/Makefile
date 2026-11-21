@@ -32,7 +32,11 @@ analyze: main.c
 install: swaydesk-tile
 	install -Dm755 swaydesk-tile $(DESTDIR)$(PREFIX)/bin/swaydesk-tile
 
+# The ready-made program shipped in the repo (apply.sh links it; no compiler on the installed system).
+release: swaydesk-tile
+	strip -o ../../home/.local/bin/swaydesk-tile swaydesk-tile
+
 clean:
 	rm -f swaydesk-tile swaydesk-tile-asan
 
-.PHONY: analyze install clean
+.PHONY: analyze install release clean
