@@ -8,7 +8,7 @@ A declarative, automated workstation setup for **Fedora 45** featuring official 
 
 - **Fedora 45 Native**: Uses upstream official Fedora 45 packages for **Sway 1.12** and **wlroots** (no third-party/custom repository required).
 - **DMS Shell Integration**: Unified notification center, launcher, system controls, and custom QML plugins:
-  - **Switcher (`Alt+Tab`, `Super+Tab`, `Super+/`)**: Windows 11-style window switcher with `grim -T` previews. See [Window switcher](#window-switcher).
+  - **Switcher (`Alt+Tab`, `Super+Tab`, `Super+K`)**: Windows 11-style window switcher with `grim -T` previews. See [Window switcher](#window-switcher).
   - **OpenHere (`Super+z`)**: Contextual working directory launcher for terminals and tools.
 - **Dynamic Theming**: Native Matugen color scheme synchronization between DMS wallpaper palettes and Sway window borders/titlebars.
 - **Dialogs**: file choosers, print, Open With, keyring prompts and Archive Manager extract open floating, sized to fit and centred (`55-rules-dialogs.conf`).
@@ -120,7 +120,7 @@ Run the idempotent configuration orchestrator:
 | `Alt+Tab` | Windows of the current workspace, most recently used first. Keep `Alt` down, press `Tab` or the arrows to move, release `Alt` to switch. A quick tap switches to the previous window without showing the list. |
 | `Alt+Shift+Tab` | Same, moving backwards. |
 | `Super+Tab` | Every workspace (and the scratchpad). Type to search, arrows move, `Enter` or a click switches. |
-| `Super+/` | Every shortcut, searchable; `Enter` or a click runs it. |
+| `Super+K` | Every shortcut, searchable; `Enter` or a click runs it. |
 | `Delete`, middle click, `✕` | Close the selected or clicked window. |
 | `Esc`, click outside | Cancel. The mouse wheel moves the selection. |
 
@@ -138,7 +138,7 @@ Inside the `iso` toolbox or WSL 2 with `/dev/kvm` (packages: `qemu-system-x86-co
 
 `vm-install.py --answers` installs unattended through an fw_cfg answers file, `--tui-smoke` drives the full-screen installer with real key presses over QMP, checks each screen through the serial mirror, saves screenshots (`tui-*.png`, into `VM_SHOTS`) and aborts, `--questions-only` answers the prompts and aborts at the review, and `--setup-only` stops once the installer has written its settings. `vm-firstboot-checks.sh` also confirms that no passphrase or password is left in logs or saved kickstarts and that the saved settings hold no secrets. Installer unit tests alone: `cd install/tui && python3 -m unittest discover -s tests`.
 
-Dwindle plugin stress test (packages: `sway gcc wayland-devel wayland-protocols-devel wlr-protocols-devel nodejs`, `quickshell` for `--plugin qml`): `node install/tests/dwindle/run.mjs --scenarios 10000 --jobs 12` runs seeded random window, keyboard and mouse scenarios against headless Sway instances (several resolutions, two outputs) through `DwindleLogic.js` and checks each quiet tree against an independent dwindle model. Failing seeds land in `--out` (default `/tmp/dwindle-test`) and replay with `--replay SEED --verbose`; `--plugin qml` drives the real `DwindleDaemon.qml` in Quickshell, `--bench 30` measures the cost per window.
+Dwindle plugin stress test (packages: `sway gcc wayland-devel wayland-protocols-devel wlr-protocols-devel nodejs`, `quickshell` for `--plugin qml`): `node install/tests/dwindle/run.mjs --scenarios 10000 --jobs 12` runs seeded random window, keyboard and mouse scenarios against headless Sway instances (several resolutions, two outputs) through `DwindleLogic.js` and checks each quiet tree against an independent model of Hyprland dwindle (`preserve_split = false`: after a window leaves a workspace, every split takes the shape of its box). `--templates` runs user stories instead (tabs toggled up to 20 times between closes, moves, drags, fullscreen, scratchpad and A/D cycling; windows shown from the scratchpad fit their output). Failing seeds land in `--out` (default `/tmp/dwindle-test`) and replay with `--replay SEED [--index N --templates] --verbose`; `--plugin qml` drives the real `DwindleDaemon.qml` in Quickshell, `--bench 4` measures the cost per event on a 4-window workspace (`--logic DIR` runs another copy of the plugin). Sway 1.12 itself can segfault during a mouse title-bar drag in the rapid "chaos" scenarios (about once in 5,000); such runs are reported as `sway-crash`.
 
 The test VM uses 8 CPUs and 16 GB RAM in `~/VMs/test`; override with `VM_CPUS`, `VM_MEM` (MiB) and `VM_DIR` (all scripts), e.g. `VM_DIR=~/VMs/tui VM_MEM=8192 VM_CPUS=6` to test beside another VM. Set `VM_ISO` to install another ISO, e.g. `swaydesk-fedora45-vm-lean.iso`. `vm-run.py` uses the Intel GPU render node for 3D when present (or `VM_RENDER`), otherwise plain `virtio-vga`.
 

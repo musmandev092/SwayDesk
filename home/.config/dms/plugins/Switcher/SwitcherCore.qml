@@ -732,6 +732,14 @@ Scope {
         [/nop switcher open overview prev/, "All workspaces (backwards)"],
         [/nop switcher open overview/, "All workspaces"],
         [/nop switcher open keys/, "This shortcut list"],
+        [/nop dwindle tabs/, "Tabs on / off"],
+        [/nop dwindle toggle/, "Dwindle on / off (workspace)"],
+        [/nop dwindle focus prev/, "Focus previous window"],
+        [/nop dwindle focus next/, "Focus next window"],
+        [/nop dwindle swap prev/, "Swap with previous window"],
+        [/nop dwindle swap next/, "Swap with next window"],
+        [/^exec nautilus/, "Files"],
+        [/^exec brave-origin/, "Browser"],
         [/^exec dms ipc call spotlight toggle$/, "App launcher"],
         [/^exec dms ipc call spotlight-bar toggle$/, "Quick search bar"],
         [/^exec dms ipc call clipboard toggle$/, "Clipboard history"],
@@ -755,12 +763,16 @@ Scope {
         [/^exec dms ipc call audio mute/, "Mute"],
         [/^exec dms ipc call brightness increment/, "Brightness up"],
         [/^exec dms ipc call brightness decrement/, "Brightness down"],
+        [/kbd_backlight.* set \+/, "Keyboard light up"],
+        [/kbd_backlight.* set \d+%-/, "Keyboard light down"],
+        [/kbd-light$/, "Keyboard light cycle"],
         [/^exec dms ipc call mpris playPause/, "Play / pause"],
         [/^exec dms ipc call mpris next/, "Next track"],
         [/^exec dms ipc call mpris previous/, "Previous track"],
         [/^exec ptyxis/, "Terminal"],
-        [/screenshot-notify full$/, "Screenshot: screen (Edit button)"],
-        [/screenshot-notify$/, "Screenshot: area (Edit button)"],
+        [/screenshot-notify full$/, "Screenshot: screen"],
+        [/screenshot-notify window$/, "Screenshot: window"],
+        [/screenshot-notify( region)?$/, "Screenshot: area"],
         [/^exec grimshot .*area/, "Screenshot: area"],
         [/^exec grimshot save output/, "Screenshot: screen"],
         [/^exec grimshot save active/, "Screenshot: window"],
@@ -788,14 +800,23 @@ Scope {
         [/^scratchpad show$/, "Show scratchpad"],
         [/^mode "resize"$/, "Resize mode"],
         [/^mode "passthrough"$/, "Passthrough mode"],
-        [/swaynag .*exit sway/, "Exit Sway"]
+        [/swaynag .*exit sway/, "Exit Sway"],
+        [/^resize shrink width/, "Narrower"],
+        [/^resize grow width/, "Wider"],
+        [/^resize grow height/, "Taller"],
+        [/^resize shrink height/, "Shorter"],
+        [/^mode "?default"?$/, "Leave the mode"],
+        [/^focus next$/, "Focus next window"],
+        [/^focus prev$/, "Focus previous window"]
     ]
 
     function prettyKey(k, vars) {
         let s = k;
         for (const n in vars)
             s = s.split(n).join(vars[n]);
-        return s.replace(/Mod4/g, "Super").replace(/Mod1/g, "Alt").replace(/Control/g, "Ctrl").replace(/\+/g, " + ");
+        const names = { grave: "`", comma: ",", period: ".", slash: "/", minus: "-", equal: "=", space: "Space", Escape: "Esc", Return: "Enter", button4: "Wheel up", button5: "Wheel down" };
+        return s.replace(/Mod4/g, "Super").replace(/Mod1/g, "Alt").replace(/Control/g, "Ctrl").split("+")
+            .map(p => names[p] || (p.length === 1 ? p.toUpperCase() : p)).join(" + ");
     }
 
     function labelFor(cmd) {
@@ -808,8 +829,18 @@ Scope {
         return first.replace(/^exec\s+/, "");
     }
 
+    // Single-line binds, `bindsym {` blocks, `mode "x" {` blocks and gestures.
     function parseKeys(text) {
         const vars = {}, rows = [];
+        let mode = "", block = false;
+        const add = (flags, key, cmd) => {
+            for (const n in vars)
+                cmd = cmd.split(n).join(vars[n]);
+            let k = /--release/.test(flags) && /^Super_[LR]$/.test(key) ? "Tap Super" : prettyKey(key, vars);
+            if (mode)
+                k = mode + " mode: " + k;
+            rows.push({ key: k, label: labelFor(cmd), cmd: cmd });
+        };
         for (const ln of text.split("\n")) {
             const s = ln.trim();
             let m = /^set\s+(\$\S+)\s+(.+)$/.exec(s);
@@ -817,13 +848,36 @@ Scope {
                 vars[m[1]] = m[2];
                 continue;
             }
+            if (s === "}") {
+                if (block)
+                    block = false;
+                else
+                    mode = "";
+                continue;
+            }
+            m = /^mode\s+"([^"]+)"\s*\{$/.exec(s);
+            if (m) {
+                mode = m[1].charAt(0).toUpperCase() + m[1].slice(1);
+                continue;
+            }
+            if (/^bindsym\s+(?:--\S+\s+)*\{$/.test(s)) {
+                block = s;
+                continue;
+            }
+            m = /^bindgesture\s+(?:--\S+\s+)*(\S+)\s+(.+)$/.exec(s);
+            if (m) {
+                const g = /^(\w+):(\d+):(\w+)$/.exec(m[1]);
+                rows.push({ key: g ? `${g[2]}-finger ${g[1]} ${g[3]}` : m[1], label: labelFor(m[2]), cmd: m[2] });
+                continue;
+            }
             m = /^bindsym\s+((?:--\S+\s+)*)(\S+)\s+(.+)$/.exec(s);
             if (m) {
-                let cmd = m[3];
-                for (const n in vars)
-                    cmd = cmd.split(n).join(vars[n]);
-                rows.push({ key: prettyKey(m[2], vars), label: labelFor(cmd), cmd: cmd });
+                add(m[1], m[2], m[3]);
+                continue;
             }
+            m = /^(\S+)\s+(.+)$/.exec(s);
+            if (block && m && !s.startsWith("#"))
+                add(block, m[1], m[2]);
         }
         keyRows = rows;
     }
@@ -844,6 +898,12 @@ Scope {
         const sw = /nop switcher open (\w+)(?: (\w+))?/.exec(row.cmd);
         if (sw) {
             Qt.callLater(() => root.open(sw[1], sw[2] || "", false));
+            return;
+        }
+        // A nop bind only reaches its plugin as a key press, so these go through the plugin's IPC.
+        const dw = /nop dwindle (tabs|toggle|focus next|focus prev|swap next|swap prev)/.exec(row.cmd);
+        if (dw) {
+            Quickshell.execDetached(["sh", "-c", 'sleep 0.25; dms ipc call dwindle action "$1" >/dev/null 2>&1', "sh", dw[1].replace(" ", "-")]);
             return;
         }
         Quickshell.execDetached(["sh", "-c", 'sleep 0.25; swaymsg "$1" >/dev/null 2>&1', "sh", row.cmd]);

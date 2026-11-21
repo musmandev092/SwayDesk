@@ -1,0 +1,6 @@
+#!/bin/sh
+# Cycle the keyboard backlight: off, low, ..., max, off.
+d='*::kbd_backlight'
+c=$(brightnessctl -d "$d" get) || exit 1
+m=$(brightnessctl -d "$d" max)
+brightnessctl -q -d "$d" set $(( (c + 1) % (m + 1) ))

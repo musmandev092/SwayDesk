@@ -13,6 +13,7 @@ PluginComponent {
 
     property var st: Logic.newState()
     property var queue: []
+    property var fitIds: []
     property bool busy: false
     property var pending: null
     property string expect: ""
@@ -89,6 +90,8 @@ PluginComponent {
         }
         if (res.toggled)
             saveOff(res.toggled);
+        for (const j of res.jobs)
+            queue = queue.concat([j]);
         if (res.tidy)
             tidyTimer.restart();
         if (!res.cmds.length)
@@ -112,26 +115,38 @@ PluginComponent {
     }
 
     function swayEvent(type, data) {
-        let e;
-        try {
-            e = JSON.parse(data);
-        } catch (err) {
-            return;
-        }
         if (type === "binding") {
+            let e;
+            try {
+                e = JSON.parse(data);
+            } catch (err) {
+                return;
+            }
             const a = Logic.bindingAction(e.binding && e.binding.command);
             if (a)
                 enqueue({ kind: a });
             return;
         }
-        const out = Logic.onWindowEvent(st, e.change, e.container);
+        const out = Logic.onWindowData(st, data);
         for (const j of out.jobs)
             enqueue(j);
-        if (out.tidy)
-            tidyTimer.restart();
+        if (out.fit && out.fit.length) {
+            fitIds = fitIds.concat(out.fit);
+            fitTimer.restart();
+        }
     }
 
-    // Flattening keeps sizes, so it is invisible; the short delay only folds event bursts together.
+    // Fit shown windows once their clients had time to take the size Sway gave them.
+    Timer {
+        id: fitTimer
+        interval: 150
+        onTriggered: {
+            root.enqueue({ kind: "fit", ids: root.fitIds });
+            root.fitIds = [];
+        }
+    }
+
+    // A second look after a failed batch, or when a cleanup needs the tree the batch made.
     Timer {
         id: tidyTimer
         interval: 25
@@ -213,6 +228,18 @@ PluginComponent {
                     root.st.off = o;
                 } catch (e) {}
             }
+        }
+    }
+
+    // The same actions as the key bindings, for callers without a binding event: dms ipc call dwindle action tabs
+    IpcHandler {
+        target: "dwindle"
+
+        function action(name: string): string {
+            if (!/^(tabs|toggle|(focus|swap)-(next|prev))$/.test(name))
+                return "unknown";
+            root.enqueue({ kind: name });
+            return "ok";
         }
     }
 

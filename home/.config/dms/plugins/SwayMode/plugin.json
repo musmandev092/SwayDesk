@@ -1,0 +1,12 @@
+{
+    "id": "swayMode",
+    "name": "Sway Mode Indicator",
+    "description": "Shows a small pill at the top of the screen while a Sway binding mode such as resize or passthrough is active.",
+    "version": "1.0.0",
+    "author": "Muhammad Usman",
+    "type": "daemon",
+    "capabilities": ["daemon"],
+    "component": "./SwayModeDaemon.qml",
+    "icon": "aspect_ratio",
+    "requires": ["sway"]
+}

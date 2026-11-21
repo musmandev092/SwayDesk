@@ -15,7 +15,8 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../../..");
 const LOGIC = path.join(REPO, "home/.config/dms/plugins/Dwindle/DwindleLogic.js");
 const QUIET_MS = 50;
-const GAP = 4;
+// Boxes are split by size ratios with the gaps left out, as the plugin does.
+const GAP = 0;
 const SETTLE_TIMEOUT_MS = 10000;
 const APPS = ["dw.term", "dw.web", "dw.edit", "dw.files", "dw.chat"];
 const OUTPUTS = [
@@ -43,14 +44,118 @@ const TEMPLATES = {
     "burst of six, close three, drag, open two": () => [{ k: "burst", n: 6 }, { k: "close", w: "?" }, { k: "close", w: "?" }, { k: "close", w: "?" }, { k: "drag", src: "?", dst: "?", edge: "?" }, ...open(2)],
     "open four, move one left by key, close, open": () => [...open(4), { k: "focus", w: "?" }, { k: "key", cmd: "move left" }, { k: "close", w: "?" }, { k: "open" }],
     "resize by mouse, open, close": () => [...open(3), { k: "resize" }, { k: "open" }, { k: "close", w: "?" }],
+    // Removals: each position in turn, down to one window, with new windows in between.
+    "close positions down to one": r => removals(r, "close"),
+    "move away positions down to one": r => removals(r, "moveAway"),
+    "move away and follow, down to one": r => removals(r, "moveFollow"),
+    "four, second one leaves (reported case)": r => [...open(4), { k: r() < 0.5 ? "close" : "moveFollow", w: 1 }, { k: "open" }, { k: "close", w: "?" }],
+    "drag empties a branch": r => [...open(4 + Math.floor(r() * 2)), { k: "drag", src: "csib", dst: "?", edge: "?" }, { k: "close", w: "?" }, { k: "open" }],
+    "scratchpad around removals": () => [...open(4), { k: "scratch", w: "focused" }, { k: "close", w: "mid" }, { k: "show" }, { k: "float", w: "same" }, { k: "close", w: "first" }],
+    "fullscreen around removals": () => [...open(4), { k: "fs", w: "?" }, { k: "close", w: "first" }, { k: "open" }, { k: "fs", w: "same" }, { k: "close", w: "csib" }, { k: "open" }],
+    "tabs after removals": r => [...open(5), { k: "close", w: "?" }, { k: "close", w: "csib" }, { k: "tabs" }, { k: "close", w: "?" }, { k: "tabs" }, { k: "open" }, { k: "close", w: r() < 0.5 ? "first" : "last" }],
+    "manual flip, then removals": () => [...open(4), { k: "focus", w: "?" }, { k: "flip" }, { k: "close", w: "csib" }, { k: "close", w: "?" }, { k: "open" }],
+    // Tabs on and off 1-20 times, with other changes in between and around every toggle.
+    "tabs storm": r => storm(r, {}),
+    "tabs storm, removals": r => storm(r, { close: 8, moveAway: 4, moveFollow: 3, down: 3 }),
+    "tabs storm, mouse": r => storm(r, { drag: 8 }),
+    "tabs storm, focus and swap": r => storm(r, { cycle: 8, swap: 8 }),
+    "tabs storm, float fullscreen scratchpad": r => storm(r, { float: 5, fs: 5, scratch: 5 }),
+    "tabs storm, outputs": r => storm(r, { moveOut: 8 }),
+    "tabs storm, bursts": r => storm(r, { burst: 5, close: 6 }),
+    "tabs storm, rapid": r => storm(r, { rapid: 6 }),
+    "tabs storm, dwindle off and on": r => storm(r, { dwToggle: 4 }),
+    "tabs storm, flips": r => storm(r, { flip: 6, close: 6 }),
+    "close down to one, rebuild, tabs between": r => {
+        const s = [];
+        for (let round = 0; round < 2 + Math.floor(r() * 3); round++) {
+            s.push({ k: "burst", n: 3 + Math.floor(r() * 6) });
+            while (s.filter(x => x.k === "close").length < s.reduce((n, x) => n + (x.k === "burst" ? x.n : 0), 0) - 1) {
+                if (r() < 0.3)
+                    s.push({ k: "tabs" });
+                s.push({ k: "close", w: POS[Math.floor(r() * POS.length)] });
+            }
+        }
+        return s;
+    },
+    // Scratchpad cases: a whole container hidden and tiled again; shown windows fit their output.
+    "container to scratchpad and back": () => [...open(4), { k: "focus", w: "mid" }, { k: "key", cmd: "focus parent" }, { k: "key", cmd: "move scratchpad" }, { k: "key", cmd: "scratchpad show" }, { k: "key", cmd: "focus parent" }, { k: "key", cmd: "floating toggle" }, { k: "open" }, { k: "close", w: "?" }],
+    "big window shown on a smaller output": () => [{ k: "ws", ws: 3 }, ...open(2), { k: "float", w: "last" }, { k: "key", cmd: "resize set width 2400 px height 1400 px" }, { k: "scratch", w: "same" }, { k: "ws", ws: 1 }, { k: "show" }, { k: "float", w: "same" }],
+    "two windows to the scratchpad at once": () => [...open(3), { k: "rapid", steps: [{ k: "scratch", w: "first" }, { k: "scratch", w: "last" }] }, { k: "showAll" }, { k: "open" }],
+    "fixed-size window tiled, hidden, shown": () => [...open(2), { k: "openFixed" }, { k: "float", w: "fixed" }, { k: "scratch", w: "fixed" }, { k: "show" }, { k: "open" }],
+    "sequence and its reverse": r => {
+        const fwd = open(2);
+        const kinds = ["open", "tabs", "swapn", "swapp", "flip", "open"];
+        for (let i = 0; i < 4 + Math.floor(r() * 8); i++)
+            fwd.push({ k: kinds[Math.floor(r() * kinds.length)] });
+        const inv = s => (s.k === "open" ? { k: "close", w: "last" } : s.k === "swapn" ? { k: "swapp" } : s.k === "swapp" ? { k: "swapn" } : s);
+        const conv = s => (s.k === "swapn" ? { k: "cycle", swap: true, step: 1 } : s.k === "swapp" ? { k: "cycle", swap: true, step: -1 } : s);
+        return fwd.concat(fwd.slice(2).reverse().map(inv)).map(conv);
+    },
 };
+
+const POS = ["first", "mid", "last", "focused", "csib"];
+
+function storm(r, weights) {
+    const W = Object.assign({ open: 4, burst: 1, close: 4, moveAway: 2, moveFollow: 1, moveOut: 2, float: 2, fs: 2, scratch: 2, drag: 2, cycle: 3, swap: 3, flip: 1, dwToggle: 0, rapid: 1, down: 0 }, weights);
+    const pos = () => POS[Math.floor(r() * POS.length)];
+    const total = Object.values(W).reduce((a, b) => a + b, 0);
+    const pick = () => {
+        let x = r() * total;
+        for (const [k, w] of Object.entries(W))
+            if ((x -= w) < 0)
+                return k;
+        return "open";
+    };
+    const op = k => {
+        switch (k) {
+        case "open": return [{ k: "open" }];
+        case "burst": return [{ k: "burst", n: 3 + Math.floor(r() * 6) }];
+        case "close": case "moveAway": case "moveFollow": return [{ k, w: pos() }];
+        case "moveOut": return [{ k: "moveOut", w: pos(), follow: r() < 0.5 }];
+        case "float": return r() < 0.5 ? [{ k: "float", w: pos() }, { k: "float", w: "same" }] : [{ k: "float", w: pos() }, { k: "tabs" }, { k: "float", w: "same" }];
+        case "fs": return [{ k: "fs", w: pos() }, ...(r() < 0.5 ? [{ k: "open" }] : [{ k: "tabs" }]), { k: "fs", w: "same" }];
+        case "scratch": return [{ k: "scratch", w: pos() }, ...(r() < 0.5 ? [{ k: "tabs" }] : []), { k: "show" }, { k: "float", w: "same" }];
+        case "drag": return [{ k: "drag", src: "?", dst: r() < 0.3 ? "other" : "?", edge: "?" }];
+        case "cycle": return [{ k: "cycle", swap: false, step: r() < 0.5 ? 1 : -1 }];
+        case "swap": return [{ k: "cycle", swap: true, step: r() < 0.5 ? 1 : -1 }];
+        case "flip": return [{ k: "focus", w: pos() }, { k: "flip" }];
+        case "dwToggle": return [{ k: "dwToggle" }, ...op(pick() === "dwToggle" ? "open" : "close"), { k: "dwToggle" }];
+        case "rapid": return [{ k: "rapid", steps: [{ k: "tabs" }, ...op(["open", "close", "cycle", "swap", "moveAway"][Math.floor(r() * 5)]), { k: "tabs" }] }];
+        case "down": return [...Array.from({ length: 6 }, () => ({ k: "close", w: pos() })), { k: "burst", n: 3 + Math.floor(r() * 4) }];
+        }
+        return [];
+    };
+    const steps = open(2 + Math.floor(r() * 5));
+    const toggles = 1 + Math.floor(r() * 20);
+    for (let t = 0; t < toggles; t++) {
+        steps.push({ k: "tabs" });
+        for (let i = Math.floor(r() * 3); i > 0; i--)
+            steps.push(...op(pick()));
+    }
+    return steps;
+}
+
+function removals(r, how) {
+    const steps = open(3 + Math.floor(r() * 4));
+    let n = steps.length;
+    for (let guard = 0; n > 1 && guard < 12; guard++) {
+        if (r() < 0.2) {
+            steps.push({ k: "open" });
+            n++;
+        } else {
+            steps.push({ k: how, w: ["first", "mid", "last", "focused", "csib"][Math.floor(r() * 5)] });
+            n--;
+        }
+    }
+    return steps;
+}
 const TEMPLATE_NAMES = Object.keys(TEMPLATES);
 
 const now = () => performance.now();
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 function parseArgs(argv) {
-    const o = { scenarios: 100, jobs: Math.max(1, Math.min(12, os.cpus().length - 4)), seed: 1, out: path.join(os.tmpdir(), "dwindle-test"), seeds: null, verbose: false, worker: false, stopAfter: 0, transport: "socket", bench: 0 };
+    const o = { scenarios: 100, jobs: Math.max(1, Math.min(12, os.cpus().length - 4)), seed: 1, out: path.join(os.tmpdir(), "dwindle-test"), seeds: null, verbose: false, worker: false, stopAfter: 0, transport: "socket", bench: 0, index: 0 };
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
         const v = () => argv[++i];
@@ -63,12 +168,16 @@ function parseArgs(argv) {
         else if (a === "--transport") o.transport = v();
         else if (a === "--bench") o.bench = +v();
         else if (a === "--plugin") o.plugin = v();
+        else if (a === "--logic") o.logic = v();
+        else if (a === "--rounds") o.rounds = +v();
         else if (a === "--templates") o.templates = true;
+        else if (a === "--index") o.index = +v();
         else if (a === "--verbose") o.verbose = true;
         else if (a === "--worker") o.worker = true;
         else if (a === "--help") {
             console.log("node run.mjs [--scenarios N] [--jobs J] [--seed S] [--out DIR] [--replay SEED,...] [--stop-after FAILS] [--verbose]\n" +
-                "             [--transport socket|swaymsg] [--plugin qml] [--bench WINDOWS] [--templates]");
+                "             [--transport socket|swaymsg] [--plugin qml] [--templates] [--logic PLUGIN_DIR]\n" +
+                "             [--bench WINDOWS [--rounds N]]");
             process.exit(0);
         }
     }
@@ -91,10 +200,16 @@ function rngFrom(seed) {
     };
 }
 
-function loadLogic() {
-    const src = fs.readFileSync(LOGIC, "utf8").replace(/^\.pragma library\s*$/m, "");
+// --logic DIR runs another copy of the plugin (DwindleLogic.js and DwindleDaemon.qml), e.g. an older one.
+function pluginDir(opts) {
+    return opts.logic ? path.resolve(opts.logic) : path.dirname(LOGIC);
+}
+
+function loadLogic(opts) {
+    const file = path.join(pluginDir(opts), "DwindleLogic.js");
+    const src = fs.readFileSync(file, "utf8").replace(/^\.pragma library\s*$/m, "");
     const ctx = vm.createContext({ console });
-    vm.runInContext(src, ctx, { filename: LOGIC });
+    vm.runInContext(src, ctx, { filename: file });
     return ctx;
 }
 
@@ -186,6 +301,16 @@ class Ipc {
     }
 }
 
+// Pointer buttons bound to the plugin's commands, so --plugin qml gets real binding events.
+const BUTTONS = {
+    "nop dwindle tabs": ["BTN_SIDE", 275],
+    "nop dwindle toggle": ["BTN_EXTRA", 276],
+    "nop dwindle focus next": ["BTN_FORWARD", 277],
+    "nop dwindle focus prev": ["BTN_BACK", 278],
+    "nop dwindle swap next": ["BTN_TASK", 279],
+    "nop dwindle swap prev": ["BTN_0", 256],
+};
+
 function swayConfig(out) {
     const lines = [
         "xwayland disable",
@@ -200,8 +325,7 @@ function swayConfig(out) {
         "focus_follows_mouse no",
         "mouse_warping none",
         'for_window [app_id="^dwdialog$"] floating enable, move position center',
-        "bindsym --whole-window BTN_SIDE nop dwindle tabs",
-        "bindsym --whole-window BTN_EXTRA nop dwindle toggle",
+        ...Object.entries(BUTTONS).map(([cmd, b]) => `bindsym --whole-window ${b[0]} ${cmd}`),
     ];
     const o = out.outs[0];
     lines.push(`output HEADLESS-1 mode ${o.mode} position 0 0` + (o.transform ? ` transform ${o.transform}` : ""));
@@ -295,6 +419,8 @@ class Pointer {
 
     send(line) {
         return new Promise(r => {
+            if (this.proc.exitCode !== null || this.proc.signalCode !== null)
+                return r();
             this.waiters.push(r);
             this.proc.stdin.write(line + "\n");
         });
@@ -378,11 +504,13 @@ function normWs(ws) {
     return { l: LCODE[ws.layout] || ws.layout, c: kids };
 }
 
-// Independent model of Hyprland dwindle (force_split = 2, preserve_split).
+// Independent model of Hyprland dwindle (force_split = 2, preserve_split = false). Inner nodes
+// are { d, f, a, b }: direction, share of a, children. Leaves are { id }.
 function mContains(n, id) {
     return !!n && (n.id === id || (!!n.a && (mContains(n.a, id) || mContains(n.b, id))));
 }
 
+// The sibling of a removed window takes over the parent's box and is flagged for re-flow.
 function mRemove(n, id) {
     if (!n)
         return null;
@@ -390,10 +518,79 @@ function mRemove(n, id) {
         return n.id === id ? null : n;
     const a = mRemove(n.a, id), b = mRemove(n.b, id);
     if (!a)
-        return b;
+        return Object.assign({}, b, { flow: true });
     if (!b)
-        return a;
-    return { d: n.d, a, b };
+        return Object.assign({}, a, { flow: true });
+    return Object.assign({}, n, { a, b });
+}
+
+function mChildRects(r, d, f) {
+    const s = f === undefined ? 0.5 : f;
+    return d === "h" ? [{ w: (r.w - GAP) * s, h: r.h }, { w: (r.w - GAP) * (1 - s), h: r.h }] : [{ w: r.w, h: (r.h - GAP) * s }, { w: r.w, h: (r.h - GAP) * (1 - s) }];
+}
+
+// Hyprland with preserve_split = false, after a window left the workspace: every split takes the
+// shape of its box (strict >), turned splits from even halves. out.amb is set when a box is too
+// square to call and its split does not already fit.
+function mReflow(n, r, out) {
+    if (!n.a)
+        return { id: n.id };
+    const s = r.w > r.h ? "h" : "v";
+    let d = n.d, f = n.f;
+    // Gaps and title bars put the plugin's boxes a few pixels off the model's.
+    if (Math.abs(r.w - r.h) < 24)
+        out.amb = true;
+    if (d !== s) {
+        d = s;
+        f = 0.5;
+    }
+    const [ra, rb] = mChildRects(r, d, f);
+    return { d, f, a: mReflow(n.a, ra, out), b: mReflow(n.b, rb, out) };
+}
+
+function mParentOf(n, id) {
+    if (!n || !n.a)
+        return null;
+    if ((!n.a.a && n.a.id === id) || (!n.b.a && n.b.id === id))
+        return n;
+    return mParentOf(n.a, id) || mParentOf(n.b, id);
+}
+
+function mSwapIds(n, x, y) {
+    if (!n.a)
+        return { id: n.id === x ? y : n.id === y ? x : n.id };
+    return Object.assign({}, n, { a: mSwapIds(n.a, x, y), b: mSwapIds(n.b, x, y) });
+}
+
+// Sway's tree as a model, when it is a clean binary split tree (or one tab group).
+function mAdopt(ws) {
+    const isWin = n => !(n.nodes && n.nodes.length);
+    const size = (k, key) => k.rect[key] + (key === "height" && isWin(k) && k.deco_rect ? k.deco_rect.height : 0);
+    const node = (kids, layout) => {
+        if (kids.length !== 2 || (layout !== "splith" && layout !== "splitv"))
+            return undefined;
+        const a = conv(kids[0]), b = conv(kids[1]);
+        if (!a || !b)
+            return undefined;
+        const key = layout === "splith" ? "width" : "height";
+        const s0 = size(kids[0], key), s1 = size(kids[1], key);
+        return { d: layout === "splith" ? "h" : "v", f: s0 > 0 && s1 > 0 ? s0 / (s0 + s1) : 0.5, a, b };
+    };
+    const conv = n => {
+        if (isWin(n))
+            return n.pid > 0 ? { id: n.id } : undefined;
+        if (n.layout === "tabbed" || n.layout === "stacked")
+            return undefined;
+        return n.nodes.length === 1 ? conv(n.nodes[0]) : node(n.nodes, n.layout);
+    };
+    const kids = ws.nodes || [];
+    if (!kids.length)
+        return { kind: "empty", root: null, list: [] };
+    const tabs = kids.length === 1 && kids[0].layout === "tabbed" ? kids[0].nodes : ws.layout === "tabbed" ? kids : null;
+    if (tabs && tabs.every(isWin))
+        return { kind: "tabbed", root: null, list: tabs.map(k => k.id) };
+    const root = kids.length === 1 ? conv(kids[0]) : node(kids, ws.layout);
+    return root ? { kind: "dwindle", root, list: [] } : null;
 }
 
 function mLeaves(n, out = []) {
@@ -411,15 +608,14 @@ function mLeaves(n, out = []) {
 function mBox(n, id, r) {
     if (!n.a)
         return n.id === id ? r : null;
-    const h = n.d === "h";
-    const ra = h ? { w: (r.w - GAP) / 2, h: r.h } : { w: r.w, h: (r.h - GAP) / 2 };
-    return mBox(n.a, id, ra) || mBox(n.b, id, ra);
+    const [ra, rb] = mChildRects(r, n.d, n.f);
+    return mBox(n.a, id, ra) || mBox(n.b, id, rb);
 }
 
 function mSplit(n, id, newId, d) {
     if (!n.a)
-        return n.id === id ? { d, a: n, b: { id: newId } } : n;
-    return { d: n.d, a: mSplit(n.a, id, newId, d), b: mSplit(n.b, id, newId, d) };
+        return n.id === id ? { d, f: 0.5, a: n, b: { id: newId } } : n;
+    return Object.assign({}, n, { a: mSplit(n.a, id, newId, d), b: mSplit(n.b, id, newId, d) });
 }
 
 function mNorm(w) {
@@ -456,7 +652,7 @@ class Replica {
     }
 
     idle() {
-        return !this.busy && !this.queue.length && !this.timer;
+        return !this.busy && !this.queue.length && !this.timer && !this.fitTimer;
     }
 
     enqueue(job) {
@@ -569,6 +765,8 @@ class Replica {
         }
         job.cmds = res.cmds.slice();
         this.sc.jobDecided(job, t, res);
+        for (const j of res.jobs || [])
+            this.queue = this.queue.concat([j]);
         if (res.tidy)
             this.restartTidy();
         if (!res.cmds.length)
@@ -598,7 +796,7 @@ class Replica {
         }, 25);
     }
 
-    swayEvent(type, e) {
+    swayEvent(type, e, body) {
         if (type === "binding") {
             const a = this.L.bindingAction(e.binding && e.binding.command);
             if (a)
@@ -606,13 +804,23 @@ class Replica {
             return;
         }
         const own = e.change === "move" && this.st.ownMoves[e.container.id];
-        const out = this.L.onWindowEvent(this.st, e.change, e.container);
+        const out = this.L.onWindowData ? this.L.onWindowData(this.st, body || JSON.stringify(e)) : this.L.onWindowEvent(this.st, e.change, e.container);
+        if (out.tidy)
+            this.restartTidy();
         if (this.sc.opts.verbose && e.change === "move")
             this.sc.note(`  move ${this.sc.title(e.container.id)} type=${e.container.type} own=${!!own} jobs=${out.jobs.map(j => j.kind)}`);
         for (const j of out.jobs)
             this.enqueue(j);
-        if (out.tidy)
-            this.restartTidy();
+        // Like the daemon's fitTimer.
+        if (out.fit && out.fit.length) {
+            this.fitIds = (this.fitIds || []).concat(out.fit);
+            clearTimeout(this.fitTimer);
+            this.fitTimer = setTimeout(() => {
+                this.fitTimer = null;
+                this.enqueue({ kind: "fit", ids: this.fitIds });
+                this.fitIds = [];
+            }, 150);
+        }
     }
 }
 
@@ -642,10 +850,11 @@ class QmlPlugin {
         fs.writeFileSync(path.join(dir, "Modules/Plugins/PluginComponent.qml"), "import QtQuick\nItem {}\n");
         fs.writeFileSync(path.join(dir, "shell.qml"), 'import Quickshell\nimport "Dwindle"\nShellRoot {\n    DwindleDaemon {}\n}\n');
         for (const f of ["DwindleDaemon.qml", "DwindleLogic.js"])
-            fs.copyFileSync(path.join(path.dirname(LOGIC), f), path.join(dir, "Dwindle", f));
+            fs.copyFileSync(path.join(pluginDir(this.sc.opts), f), path.join(dir, "Dwindle", f));
         this.state = path.join(this.sc.sway.dir, "state");
         this.log = "";
-        this.proc = spawn("qs", ["-p", path.join(dir, "shell.qml")], { env: Object.assign({}, this.sc.sway.env, { XDG_STATE_HOME: this.state, QT_QPA_PLATFORM: "wayland" }), stdio: ["ignore", "pipe", "pipe"] });
+        this.env = Object.assign({}, this.sc.sway.env, { XDG_STATE_HOME: this.state, QT_QPA_PLATFORM: "wayland" });
+        this.proc = spawn("qs", ["-p", path.join(dir, "shell.qml")], { env: this.env, stdio: ["ignore", "pipe", "pipe"] });
         const onData = d => (this.log = (this.log + d).slice(-20000));
         this.proc.stdout.on("data", onData);
         this.proc.stderr.on("data", onData);
@@ -656,17 +865,32 @@ class QmlPlugin {
             await sleep(20);
         }
         await sleep(100);
+        const r = await new Promise(res => execFile("qs", ["ipc", "--pid", String(this.proc.pid), "call", "dwindle", "action", "nothing"], { env: this.env }, (err, out) => res(String(out || err).trim())));
+        if (r !== "unknown")
+            this.sc.fail("qml-ipc", `unknown action answered ${r.slice(0, 200)}`);
     }
 
     idle() {
-        return now() - this.sc.lastEvent > 150;
+        return now() - this.sc.lastEvent > 150 && now() - this.sc.lastFitEvent > 400;
     }
 
     // Bindings reach the plugin as real Sway binding events from the virtual pointer's side buttons.
     swayEvent(type, e) {
         if (type !== "binding")
             return;
-        const button = /tabs/.test(e.binding.command) ? 275 : 276;
+        // Half of the actions go through the plugin's IPC entry (the shortcut list's way in) instead.
+        if (this.sc.rng() < 0.5) {
+            const kind = this.sc.L.bindingAction(e.binding.command);
+            this.sc.inflight++;
+            execFile("qs", ["ipc", "--pid", String(this.proc.pid), "call", "dwindle", "action", kind], { env: this.env }, (err, stdout) => {
+                if (String(stdout).trim() !== "ok")
+                    this.sc.fail("qml-ipc", `action ${kind}: ${String(stdout || err).trim().slice(0, 200)}`);
+                this.sc.inflight--;
+                this.sc.lastAction = now();
+            });
+            return;
+        }
+        const button = BUTTONS[e.binding.command][1];
         this.sc.inflight++;
         this.sc.pointer.send(`b ${button} 1`).then(() => this.sc.pointer.send(`b ${button} 0`)).then(() => {
             this.sc.inflight--;
@@ -678,6 +902,8 @@ class QmlPlugin {
         try {
             this.proc.kill("SIGKILL");
         } catch (e) {}
+        if (process.env.DW_QS_LOG)
+            fs.writeFileSync(process.env.DW_QS_LOG, this.log);
         const m = /(dwindle: |TypeError|ReferenceError|SyntaxError|RangeError)[^\n]*/.exec(this.log);
         if (m)
             this.sc.fail("qml-error", m[0]);
@@ -713,9 +939,14 @@ class Scenario {
         this.lastJobStart = 0;
         this.silentChecks = 0;
         this.drags = 0;
+        this.adopted = 0;
+        this.compared = 0;
         this.cmdErrors = [];
         this.fsAt = new Set();
         this.fsWs = new Map();
+        this.fitDue = new Map();
+        this.lastFitEvent = 0;
+        this.handledAt = 0;
         this.prev = null;
         this.t0 = now();
     }
@@ -730,6 +961,14 @@ class Scenario {
         if (this.failures.length < 20)
             this.failures.push({ type, msg });
         this.note(`FAIL ${type}: ${msg}`);
+    }
+
+    swayCrashed() {
+        if (this.crashed)
+            return;
+        this.crashed = true;
+        const last = this.replica && this.replica.pending ? this.replica.pending.kind : "-";
+        this.fail("sway-crash", `job in flight: ${last}; ${this.sway.stderr().slice(-500)}`);
     }
 
     title(id) {
@@ -798,10 +1037,15 @@ class Scenario {
         p.on("exit", (code, signal) => {
             c.exited = true;
             this.lastEvent = now();
+            // The close event can trail a clean exit by seconds when 20+ sessions share the CPU.
             setTimeout(() => {
-                if (!c.closing && !this.stopping)
+                if (c.closing || this.stopping)
+                    return;
+                if (this.sway.exited())
+                    this.swayCrashed();
+                else
                     this.fail("client-died", `${title} exited unexpectedly (${code === null ? signal : "code " + code}) ${c.err.trim()}`);
-            }, 500);
+            }, this.sway.exited() ? 0 : 10000);
         });
         this.note(`open ${title} ${appId}${kind !== "normal" ? " " + kind : ""}`);
     }
@@ -810,7 +1054,7 @@ class Scenario {
         return [...this.clients.values()].filter(c => !c.exited && c.conId != null);
     }
 
-    onSway(type, msg) {
+    onSway(type, msg, body) {
         this.lastEvent = now();
         if (type === 6)
             return;
@@ -848,8 +1092,14 @@ class Scenario {
         }
         if (this.replica instanceof QmlPlugin && /^(new|close|move|floating)$/.test(msg.change))
             this.lastJobStart = now();
+        if (msg.change === "move" || msg.change === "floating" || (msg.change === "fullscreen_mode" && c.fullscreen_mode === 0)) {
+            // Chaos runs pile up actions between checks (a window can come back with no event).
+            if (!this.racy)
+                this.fitDue.set(c.id, now());
+            this.lastFitEvent = now();
+        }
         this.note(`ev ${msg.change} ${this.title(c.id)}${msg.change === "floating" ? " " + c.type : ""}${msg.change === "fullscreen_mode" ? " " + c.fullscreen_mode : ""}`);
-        this.replica.swayEvent("window", JSON.parse(JSON.stringify(msg)));
+        this.replica.swayEvent("window", msg, body);
     }
 
     jobDecided(job, t, res) {
@@ -861,11 +1111,6 @@ class Scenario {
             this.note(`  tree n=${r(n)} x=${x ? r(x) : "-"} kids=[${x ? (x.nodes || []).map(r).join(" ") : ""}]`);
             if (x && x._ws)
                 this.note(`  ws ${this.rawRect(x._ws)} layout=${x._ws.layout}`);
-            const pm = res.cmds.length && /^\[con_id=(\d+)[^\]]*\] mark --add _dw_p/.exec(res.cmds.find(c => c.includes("_dw_p")) || "");
-            if (pm && t.ids[pm[1]]) {
-                const s = this.L.slotOf(this.replica.st, t.ids[pm[1]], job.id);
-                this.note(`  slot of ${this.title(+pm[1])}: ${s.width.toFixed(0)}x${s.height.toFixed(0)}`);
-            }
         }
         if (this.opts.verbose && job.kind === "tidy" && res.cmds.length)
             for (const id in t.ids)
@@ -883,24 +1128,31 @@ class Scenario {
             if (!n)
                 continue;
             const wsName = n._ws ? n._ws.name : "";
-            if (job.kind !== "tabs" && this.replica.st.off[wsName])
+            if (!/^(tabs|focus|swap|fit)/.test(job.kind) && this.replica.st.off[wsName] && !/\] focus$/.test(c))
                 this.fail("off-touched", `${job.kind} touched ${this.title(n.id)} on disabled workspace ${wsName}: ${c}`);
             if (m[2] === "split" && /split [hv]$/.test(c) && n.fullscreen_mode > 0)
                 this.fail("split-fullscreen", `${c} on fullscreen ${this.title(n.id)}`);
-            if ((m[2] === "split" || m[2] === "move") && (n._floating || n.type === "floating_con") && !/ tiling[\] ]/.test(c))
+            if ((m[2] === "split" || (m[2] === "move" && m[3] === " container")) && (n._floating || n.type === "floating_con") && !/ tiling[\] ]/.test(c))
                 this.fail("floating-touched", `${c} on floating ${this.title(n.id)}`);
         }
     }
 
     // An error is a race when something outside the plugin changed the tree while the job ran.
     cmdError(job, i, error) {
-        const c = job.cmds[i] || "";
+        // Sway answers every comma-separated part of a command on its own.
+        const parts = job.cmds.flatMap(x => {
+            const m = /^(\[[^\]]*\] )?(.*)$/.exec(x);
+            return m[2].split(/,\s*/).map(p => (m[1] || "") + p);
+        });
+        const c = parts[i] || "";
         const race = this.extAt >= job.t0 - 5;
         this.cmdErrors.push({ job: job.kind, cmd: c, error, race });
         this.note(`cmd error in ${job.kind}${race ? " (race)" : ""}: ${c} -> ${error}`);
     }
 
     jobDone(job) {
+        if (this.jobLog)
+            this.jobLog.push(job);
         this.latency.push(+(job.t2 - job.t0).toFixed(2));
         this.lastJobEnd = job.t2;
         if (job.t1) {
@@ -923,7 +1175,7 @@ class Scenario {
                 return false;
             }
             if (this.sway.exited()) {
-                this.fail("sway-crash", this.sway.stderr().slice(-600));
+                this.swayCrashed();
                 return false;
             }
             await sleep(4);
@@ -962,8 +1214,39 @@ class Scenario {
             // the plugin's part is checked on its own commands in jobDecided() instead.
             if (wsName === "__i3_scratch" && n.type === "con" && !i.floating)
                 this.fail("scratch-tiled", `${stage}: tiled node ${this.title(n.id)} in scratchpad`);
-            if (!unseen && n.type === "con" && !i.floating && (n.layout === "splith" || n.layout === "splitv") && i.parent && i.parent.type !== "workspace" && (n.nodes || []).length === 1 && wsName && wsName !== "__i3_scratch" && !this.everOff.has(wsName))
+            const wn = n.type === "workspace" ? n.name : wsName;
+            const plain = !unseen && wn && wn !== "__i3_scratch" && !this.everOff.has(wn) && !i.floating && (n.type === "con" || n.type === "workspace");
+            // Behind a fullscreen window the plugin leaves the tree alone until it is gone.
+            const fsHere = plain && [...a.nodes.values()].some(x => x.ws && x.ws.name === wn && x.n.type !== "workspace" && x.n.fullscreen_mode > 0);
+            if (plain && !fsHere && n.type === "con" && (n.layout === "splith" || n.layout === "splitv") && i.parent && i.parent.type !== "workspace" && (n.nodes || []).length === 1)
                 this.fail("single-child", `${stage}: ${n.layout} ${n.id} on ${wsName} wraps only ${this.title(n.nodes[0].id)}`);
+            if (plain && !fsHere && (n.layout === "splith" || n.layout === "splitv") && (n.nodes || []).length > 2)
+                this.fail("not-binary", `${stage}: ${this.raw(n)} on ${wn} waiting=${Object.keys(this.replica.st.unplaced || {}).map(id => this.title(+id))} held=${(this.replica.st.held || []).map(h => this.title(h.id))}`);
+            if (plain && (n.layout === "tabbed" || n.layout === "stacked") && (n.nodes || []).length) {
+                for (let p = i.parent; p && p.type !== "output"; p = a.nodes.get(p.id).parent)
+                    if (p.layout === "tabbed" || p.layout === "stacked") {
+                        this.fail("nested-tabs", `${stage}: ${this.raw(i.ws || n)}`);
+                        break;
+                    }
+                if (n.nodes.length === 1 && n.nodes[0].nodes && n.nodes[0].nodes.length)
+                    this.fail("nested-tabs", `${stage}: tab group around a container ${this.raw(i.ws || n)}`);
+            }
+        }
+        // Floating windows shown, floated or moved since the last check fit their output (unless a
+        // drag or resize by hand came after).
+        for (const [id, at] of this.fitDue) {
+            this.fitDue.delete(id);
+            const i = a.wins.find(x => x.n.id === id);
+            // Tiles inside a floating container follow the container.
+            if (!i || !i.floating || i.parent.type !== "workspace" || !i.ws || i.ws.name === "__i3_scratch" || i.n.fullscreen_mode > 0 || this.handledAt > at || !i.output)
+                continue;
+            const o = i.output.rect, r = i.n.rect, g = i.n.geometry, c = i.n.window_rect;
+            const inside = r.x >= o.x - 2 && r.y >= o.y - 2 && r.x + r.width <= o.x + o.width + 2 && r.y + r.height <= o.y + o.height + 2;
+            const big = r.width > o.width * 0.9 + 3 || r.height > o.height * 0.9 + 3;
+            const cl = this.byCon.get(id);
+            const stretched = cl && cl.kind === "fixed" && i.parent.type === "workspace" && g && c && (c.width > g.width + 34 || c.height > g.height + 34);
+            if (!inside || big || stretched)
+                this.fail("fit", `${stage}: ${this.title(id)} ${r.width}x${r.height}+${r.x}+${r.y} on ${o.width}x${o.height}+${o.x}+${o.y}${stretched ? ` content ${c.width}x${c.height} > own ${g.width}x${g.height}` : ""}`);
         }
         for (const e of this.cmdErrors) {
             if (e.race)
@@ -977,7 +1260,7 @@ class Scenario {
     // Model bookkeeping, applied once per settled step.
     mws(name) {
         if (!this.model.has(name))
-            this.model.set(name, { kind: "empty", root: null, list: [], impure: "", held: [] });
+            this.model.set(name, { kind: "empty", root: null, list: [], impure: "", held: [], deferred: false });
         return this.model.get(name);
     }
 
@@ -991,22 +1274,38 @@ class Scenario {
         return null;
     }
 
+    // Drops id from the model; returns the workspace whose tiling lost it, or null.
     mDrop(id) {
-        for (const [, w] of this.model) {
+        let from = null;
+        for (const [name, w] of this.model) {
             w.held = w.held.filter(h => h.id !== id);
             if (w.kind === "dwindle" && mContains(w.root, id)) {
                 w.root = mRemove(w.root, id);
                 if (!w.root)
                     w.kind = "empty";
+                from = name;
             } else if (w.kind === "tabbed" && w.list.includes(id)) {
                 w.list = w.list.filter(x => x !== id);
                 if (!w.list.length)
                     w.kind = "empty";
+                from = name;
             }
         }
+        return from;
     }
 
-    mInsert(a, wsName, id, snap, held, dir) {
+    // A window left the workspace's tiling: re-flow it, or once nothing there is fullscreen.
+    mRemoved(name) {
+        if (!name)
+            return;
+        const w = this.mws(name);
+        if ((this.fsWs.get(name) || []).length)
+            w.deferred = true;
+        else
+            this.mFlowWs(w, name);
+    }
+
+    mInsert(a, wsName, id, snap, held) {
         if (!wsName || wsName === "__i3_scratch")
             return;
         const w = this.mws(wsName);
@@ -1017,7 +1316,7 @@ class Scenario {
         if (w.impure)
             return;
         // Sway puts a window opened into tabs next to the focused tab; nothing waits for fullscreen there.
-        if (!held && (this.fsWs.get(wsName) || []).some(fid => fid !== id && (w.kind !== "tabbed" || !this.fsAt.has(fid)))) {
+        if (!held && (this.fsWs.get(wsName) || []).some(fid => w.kind !== "tabbed" || !this.fsAt.has(fid))) {
             w.held.push({ id, snap });
             return;
         }
@@ -1043,17 +1342,21 @@ class Scenario {
             return;
         }
         const leaves = mLeaves(w.root);
-        const p = snap.find(s => s !== id && leaves.includes(s));
+        let p = snap.find(s => s !== id && leaves.includes(s));
+        // With no focused tile there, the plugin falls back on another; it ends up right before the window.
+        if (p === undefined) {
+            const i = a.wins.find(x => x.n.id === id);
+            const sib = i && !i.floating ? i.parent.nodes : [];
+            const prev = sib[sib.indexOf(i && i.n) - 1];
+            if (prev && !(prev.nodes && prev.nodes.length) && leaves.includes(prev.id))
+                p = prev.id;
+        }
         if (p === undefined) {
             w.impure = `no partner for ${this.title(id)}`;
             return;
         }
         if (this.fsAt.has(p)) {
             w.impure = "partner fullscreen";
-            return;
-        }
-        if (dir === "h" || dir === "v") {
-            w.root = mSplit(w.root, p, id, dir);
             return;
         }
         const box = mBox(w.root, p, rect);
@@ -1064,9 +1367,11 @@ class Scenario {
         w.root = mSplit(w.root, p, id, box.w > box.h ? "h" : "v");
     }
 
-    applyModel(a, action) {
+    applyModel(a) {
         const ops = this.ops;
         this.ops = [];
+        for (const ws of wsNodes(a))
+            this.mws(ws.name).rect = { w: ws.rect.width, h: ws.rect.height };
         const winInfo = id => a.wins.find(i => i.n.id === id);
         for (const o of ops) {
             if (o.op === "new") {
@@ -1074,15 +1379,12 @@ class Scenario {
                 if (i && !i.floating)
                     this.mInsert(a, i.ws && i.ws.name, o.id, o.snap, false);
             } else if (o.op === "close") {
-                this.mDrop(o.id);
+                this.mRemoved(this.mDrop(o.id));
             } else if (o.op === "floating") {
                 const i = winInfo(o.id);
-                if (o.tiled && i && !i.floating) {
-                    this.mDrop(o.id);
+                this.mRemoved(this.mDrop(o.id));
+                if (o.tiled && i && !i.floating)
                     this.mInsert(a, i.ws && i.ws.name, o.id, o.snap, false);
-                } else if (!o.tiled) {
-                    this.mDrop(o.id);
-                }
             }
         }
         // Moves between workspaces and to the scratchpad. A focused container carries several
@@ -1106,7 +1408,7 @@ class Scenario {
                 continue;
             }
             if (at !== null && (i.floating || at !== wsName)) {
-                this.mDrop(id);
+                this.mRemoved(this.mDrop(id));
                 // Sway inserts a window moved by command after its last focused tile there.
                 const sib = i.floating ? [] : i.parent.nodes;
                 const prev = sib[sib.indexOf(i.n) - 1];
@@ -1117,47 +1419,89 @@ class Scenario {
                     this.mws(wsName).impure = this.mws(wsName).impure || "fullscreen window moved in";
                     continue;
                 }
-                // A pair Sway already formed keeps its direction.
                 if (prev && !(prev.nodes && prev.nodes.length))
-                    this.mInsert(a, wsName, id, [prev.id], false, sib.length === 2 ? LCODE[i.parent.layout] : "");
+                    this.mInsert(a, wsName, id, [prev.id], false);
                 else if (this.mws(wsName).kind !== "empty" && !this.mws(wsName).impure)
                     this.mws(wsName).impure = `moved ${this.title(id)} not after a tile`;
                 else
                     this.mInsert(a, wsName, id, [], false);
             }
         }
-        this.fsAt = new Set(a.wins.filter(i => !i.floating && i.n.fullscreen_mode > 0).map(i => i.n.id));
-        // Workspaces covered by a fullscreen tile or container (the plugin holds new windows there).
+        this.fsAt = new Set(a.wins.filter(i => i.n.fullscreen_mode > 0).map(i => i.n.id));
+        // Workspaces with anything fullscreen (the plugin holds new windows and re-flows there).
         this.fsWs = new Map();
         for (const [, i] of a.nodes)
-            if (i.n.type === "con" && !i.floating && i.n.fullscreen_mode > 0 && i.ws)
+            if ((i.n.type === "con" || i.n.type === "floating_con") && i.n.fullscreen_mode > 0 && i.ws)
                 this.fsWs.set(i.ws.name, (this.fsWs.get(i.ws.name) || []).concat([i.n.id]));
-        // Held windows are placed once their workspace has no fullscreen window.
+        // Once nothing is fullscreen: the re-flow that waited, then the held windows in order.
         for (const [name, w] of this.model) {
-            if (!w.held.length || (this.fsWs.get(name) || []).length)
+            if ((this.fsWs.get(name) || []).length)
+                continue;
+            if (w.deferred) {
+                w.deferred = false;
+                this.mFlowWs(w, name);
+            }
+            if (!w.held.length)
                 continue;
             const h = w.held;
             w.held = [];
-            for (const x of h)
-                if (winInfo(x.id) && !winInfo(x.id).floating)
+            for (const x of h) {
+                const i = winInfo(x.id);
+                if (i && !i.floating && i.ws && i.ws.name === name)
                     this.mInsert(a, name, x.id, x.snap, true);
+            }
         }
         for (const ws of wsNodes(a)) {
             if (ws.name === "__i3_scratch")
                 continue;
             const w = this.mws(ws.name);
             if (!tiledOn(a, ws.name).length && !w.held.length && !this.replica.st.off[ws.name])
-                Object.assign(w, { kind: "empty", root: null, list: [], impure: "" });
+                Object.assign(w, { kind: "empty", root: null, list: [], impure: "", deferred: false });
+        }
+    }
+
+    mFlowWs(w, name) {
+        if (w.kind !== "dwindle" || !w.root || !w.rect || w.impure)
+            return;
+        const out = {};
+        w.root = mReflow(w.root, w.rect, out);
+        if (out.amb)
+            w.impure = "ambiguous re-flow";
+        if (this.opts.verbose) {
+            const dump = n => (n.a ? `${n.d}(${dump(n.a)},${dump(n.b)})` : this.title(n.id));
+            this.note(`  model ${name}: ${dump(w.root)}`);
+        }
+    }
+
+    // After a step the model cannot predict (a mouse drop where the user aimed, a manual move or
+    // resize), it takes over Sway's tree once that is a clean binary dwindle again and the plugin
+    // has looked at it, and checks every later step strictly from there.
+    adoptImpure(a) {
+        if (this.actionAt > this.lastJobStart)
+            return;
+        for (const ws of wsNodes(a)) {
+            const w = this.mws(ws.name);
+            if (ws.name === "__i3_scratch" || !w.impure || w.held.length || this.replica.st.off[ws.name] || (this.fsWs.get(ws.name) || []).length)
+                continue;
+            const m = mAdopt(ws);
+            if (m) {
+                Object.assign(w, m, { impure: "", deferred: false });
+                this.adopted++;
+            }
         }
     }
 
     compareModel(a, stage) {
+        // A change Sway made without an event (a drop back onto its own spot) waits for the next job.
+        if (this.actionAt > this.lastJobStart)
+            return;
         for (const ws of wsNodes(a)) {
             if (ws.name === "__i3_scratch")
                 continue;
             const w = this.mws(ws.name);
             if (w.impure || w.held.length || this.replica.st.off[ws.name])
                 continue;
+            this.compared++;
             const act = normWs(ws);
             // Sway orders tabs by its own focus stack; only the membership is the plugin's business.
             if (w.kind === "tabbed" && act && act.l === "t" && act.c.every(c => c.w !== undefined) && act.c.length === w.list.length && act.c.every(c => w.list.includes(c.w)))
@@ -1186,27 +1530,32 @@ class Scenario {
         if (!wsName || wsName === "__i3_scratch")
             return;
         const v = tiledOn(before, wsName);
-        if (v.length < 2 || [...before.nodes.values()].some(i => i.ws && i.ws.name === wsName && !i.floating && i.n.type === "con" && i.n.fullscreen_mode > 0))
+        if (!v.length || [...before.nodes.values()].some(i => i.ws && i.ws.name === wsName && i.n.fullscreen_mode > 0 && i.n.type !== "workspace"))
             return;
+        const grp = n => n.layout === "tabbed" || n.layout === "stacked";
         const p0 = v[0].parent;
-        const wasTabbed = p0.layout === "tabbed" && v.every(i => i.parent === p0);
+        const wasTabbed = grp(p0) && v.every(i => i.parent === p0);
         const v2 = tiledOn(after, wsName);
         const order = l => l.map(i => this.title(i.n.id)).join(",");
+        const wsAfter = v2[0] ? after.nodes.get(v2[0].ws.id).n : null;
+        const groups = [...after.nodes.values()].filter(i => (i.n === wsAfter || (i.ws && i.ws === wsAfter && i.n.type === "con" && !i.floating)) && grp(i.n) && i.n.nodes.length).length;
         if (!wasTabbed) {
             const p = v2[0] && v2[0].parent;
             const ok = p && p.layout === "tabbed" && v2.every(i => i.parent === p) && v2.length === v.length;
-            const tabbedCount = [...after.nodes.values()].filter(i => i.ws && i.ws.name === wsName && i.n.layout === "tabbed" && i.n.type !== "workspace" && !i.floating).length + (after.nodes.get(p ? p.id : -1) && p.type === "workspace" ? 1 : 0);
-            if (!ok || tabbedCount !== 1)
-                this.fail("tabs-on", `ws ${wsName}: expected one tabbed container with ${order(v)}, got ${this.fmt(normWs(after.nodes.get(v2[0] ? v2[0].ws.id : 0).n))}`);
+            if (!ok || groups !== 1)
+                this.fail("tabs-on", `ws ${wsName}: expected one tabbed container with ${order(v)}, got ${wsAfter ? this.raw(wsAfter) : "-"}`);
             else if (order(v) !== order(v2))
                 this.fail("tabs-on", `ws ${wsName}: tab order ${order(v2)} differs from tree order ${order(v)}`);
+        } else if (v.length === 1) {
+            if (groups || v2.length !== 1)
+                this.fail("tabs-off", `ws ${wsName}: expected a plain window, got ${wsAfter ? this.raw(wsAfter) : "-"}`);
         } else {
-            const ws = after.nodes.get(v2[0].ws.id).n;
+            const ws = wsAfter;
             const bin = n => !(n.nodes && n.nodes.length) || (n.nodes.length === 2 && (n.layout === "splith" || n.layout === "splitv") && n.nodes.every(bin));
             let top = ws;
             while (top.nodes.length === 1 && top.nodes[0].nodes && top.nodes[0].nodes.length)
                 top = top.nodes[0];
-            if (!(top.nodes.length === 2 && top.nodes.every(bin)) || order(v) !== order(v2))
+            if (!(top.nodes.length === 2 && top.nodes.every(bin)) || order(v) !== order(v2) || groups)
                 this.fail("tabs-off", `ws ${wsName}: expected binary dwindle of ${order(v)}, got ${this.raw(ws)}`);
         }
         if (f.n.pid > 0 && (!after.focused || after.focused.n.id !== f.n.id))
@@ -1218,6 +1567,9 @@ class Scenario {
         if (!ok)
             return null;
         const t = await this.tree();
+        this.jobSinceStep = this.lastJobStart > (this.lastStepAt || 0);
+        this.lastStepAt = now();
+        this.pureBefore = this.pureAtEnd || new Set();
         if (this.modelMode) {
             this.applyModel(t, a);
             if (this.pendingTabs) {
@@ -1226,8 +1578,16 @@ class Scenario {
             }
         }
         this.check(t, a);
-        if (this.modelMode)
+        if (this.expectFocus != null) {
+            if (!t.focused || t.focused.n.id !== this.expectFocus)
+                this.fail("cycle-focus", `${a}: expected focus on ${this.title(this.expectFocus)}, got ${t.focused ? this.title(t.focused.n.id) : "-"}`);
+            this.expectFocus = null;
+        }
+        if (this.modelMode) {
             this.compareModel(t, a);
+            this.adoptImpure(t);
+            this.pureAtEnd = new Set([...this.model].filter(([, w]) => !w.impure).map(([n]) => n));
+        }
         this.prev = t;
         return t;
     }
@@ -1283,6 +1643,7 @@ class Scenario {
         try {
             this.note(`drag ${button === 272 ? "left" : "right"} ${from.x},${from.y} -> ${to.x},${to.y}`);
             this.actionAt = now();
+            this.handledAt = now();
             await this.pointerTo(a, from.x, from.y);
             await this.pointer.send(`b ${button} 1`);
             const steps = 2 + Math.floor(this.rng() * 4);
@@ -1345,6 +1706,62 @@ class Scenario {
         return wsNodes(a).filter(w => vis.has(w.id)).map(w => w.name);
     }
 
+    // A key binding the plugin reacts to, with what the model expects of it.
+    press(cmd) {
+        this.note(`binding ${cmd}`);
+        const m = /^nop dwindle (focus|swap) (next|prev)$/.exec(cmd);
+        if (m)
+            this.modelCycle(m[1] === "swap", m[2] === "next" ? 1 : -1);
+        this.replica.swayEvent("binding", { change: "run", binding: { command: cmd } });
+    }
+
+    focusedWsName(a) {
+        const f = a && a.focused;
+        return f ? (f.n.type === "workspace" ? f.n.name : f.ws && f.ws.name) : null;
+    }
+
+    // A/D and Shift+A/D: the next or previous tile in reading order gets focus, or swaps places.
+    modelCycle(swap, step) {
+        const a = this.prev;
+        if (this.racy)
+            return;
+        const wsName = this.focusedWsName(a);
+        if (!wsName || wsName === "__i3_scratch")
+            return;
+        const v = tiledOn(a, wsName);
+        if (v.length < 2)
+            return;
+        const f = v.find(i => i.n.focused) || this.mru.map(id => v.find(i => i.n.id === id)).find(Boolean) || v[0];
+        const t = v[(v.indexOf(f) + step + v.length) % v.length];
+        const fs = [...a.nodes.values()].some(x => x.ws && x.ws.name === wsName && x.n.type !== "workspace" && x.n.fullscreen_mode > 0);
+        if (fs)
+            return;
+        this.expectFocus = swap ? f.n.id : t.n.id;
+        if (!swap || !this.modelMode)
+            return;
+        const w = this.mws(wsName);
+        if (w.kind === "dwindle" && w.root)
+            w.root = mSwapIds(w.root, f.n.id, t.n.id);
+        else if (w.kind === "tabbed")
+            w.list = w.list.map(id => (id === f.n.id ? t.n.id : id === t.n.id ? f.n.id : id));
+    }
+
+    // "layout toggle split" run by hand: the focused window's split turns until the next re-flow.
+    modelFlip() {
+        const a = this.prev;
+        const wsName = this.focusedWsName(a);
+        if (!this.modelMode || !wsName)
+            return;
+        const f = a.focused, w = this.mws(wsName);
+        if (f.floating || f.n.type !== "con" || !(f.n.pid > 0) || w.kind !== "dwindle" || !mContains(w.root, f.n.id)) {
+            w.impure = w.impure || "flip";
+            return;
+        }
+        const p = mParentOf(w.root, f.n.id);
+        if (p)
+            p.d = p.d === "h" ? "v" : "h";
+    }
+
     // One user-story step with explicit targets.
     async tstep(s) {
         const list = () => this.alive().filter(c => c.kind === "normal");
@@ -1352,8 +1769,21 @@ class Scenario {
             const l = list();
             if (sel === "same")
                 return this.picked && !this.picked.exited ? this.picked : null;
+            if (sel === "fixed") {
+                this.picked = this.alive().filter(c => c.kind === "fixed").pop() || null;
+                return this.picked;
+            }
             if (!l.length)
                 return null;
+            const a = this.prev;
+            if ((sel === "focused" || sel === "csib") && a) {
+                const ids = new Set(l.map(c => c.conId));
+                const hit = sel === "focused" ? (a.focused && ids.has(a.focused.n.id) ? [a.focused] : []) : a.wins.filter(i => ids.has(i.n.id) && !i.floating && i.parent.nodes.length === 2 && i.parent.nodes.some(k => k !== i.n && k.nodes && k.nodes.length));
+                if (hit.length) {
+                    this.picked = this.byCon.get(this.pick(hit).n.id);
+                    return this.picked;
+                }
+            }
             const c = sel === "first" ? l[0] : sel === "last" ? l[l.length - 1] : sel === "mid" ? l[Math.floor(l.length / 2)] : typeof sel === "number" ? l[Math.min(sel, l.length - 1)] : this.pick(l);
             this.picked = c;
             return c;
@@ -1385,18 +1815,67 @@ class Scenario {
         case "show":
             await on(this.picked, "scratchpad show");
             break;
-        case "moveWs":
-            await on(win(s.w), `move container to workspace number ${s.ws}`);
+        case "moveWs": {
+            const c = win(s.w);
+            this.sameWsMove(c, String(s.ws));
+            await on(c, `move container to workspace number ${s.ws}`);
             break;
+        }
+        case "moveAway":
+        case "moveFollow": {
+            const c = win(s.w);
+            this.sameWsMove(c, "2");
+            await on(c, s.k === "moveAway" ? "move container to workspace number 2" : "move container to workspace number 2; workspace number 2; workspace number 1");
+            break;
+        }
         case "ws":
             await this.cmd(`workspace number ${s.ws}`);
             break;
         case "key":
+            this.handledAt = now();
             await this.cmd(s.cmd);
             break;
         case "tabs":
-            this.note("binding nop dwindle tabs");
-            this.replica.swayEvent("binding", { change: "run", binding: { command: "nop dwindle tabs" } });
+            this.press("nop dwindle tabs");
+            break;
+        case "cycle":
+            this.press(`nop dwindle ${s.swap ? "swap" : "focus"} ${s.step > 0 ? "next" : "prev"}`);
+            break;
+        case "flip":
+            this.modelFlip();
+            await this.cmd("layout toggle split");
+            break;
+        case "dwToggle":
+            this.markImpure(this.prev, "dwToggle");
+            this.press("nop dwindle toggle");
+            break;
+        case "moveOut": {
+            const c = win(s.w);
+            if (this.out.outs.length > 1) {
+                const i = c && this.prev && this.prev.wins.find(x => x.n.id === c.conId);
+                const other = i && i.output && i.output.name === "HEADLESS-1" ? "HEADLESS-2" : "HEADLESS-1";
+                await on(c, `move container to output ${other}${s.follow ? `; focus output ${other}` : ""}`);
+            } else {
+                this.sameWsMove(c, "2");
+                await on(c, "move container to workspace number 2");
+            }
+            break;
+        }
+        case "openFixed":
+            this.open("fixed");
+            break;
+        case "showAll": {
+            const a = await this.tree();
+            for (const i of a.wins.filter(x => x.ws && x.ws.name === "__i3_scratch"))
+                await this.cmd(`[con_id=${i.n.id}] scratchpad show`);
+            break;
+        }
+        case "rapid":
+            // Nothing settles in between, so cycle targets cannot be predicted from the last tree.
+            this.racy = true;
+            for (const x of s.steps)
+                await this.tstep(x);
+            this.racy = false;
             break;
         case "resize":
             await this.mouse("dragResize");
@@ -1406,6 +1885,15 @@ class Scenario {
             await this.dragSpec(s, win);
             break;
         }
+    }
+
+    // Moving a window to the workspace it is on still makes Sway re-insert it (after the last
+    // focused tile); the model does not predict that.
+    sameWsMove(c, target) {
+        const i = c && this.prev && this.prev.wins.find(x => x.n.id === c.conId);
+        const at = i && i.ws ? i.ws.name : this.prev && this.prev.focused && (this.prev.focused.n.type === "workspace" ? this.prev.focused.n.name : this.prev.focused.ws && this.prev.focused.ws.name);
+        if (at && at === target)
+            this.mws(at).impure = this.mws(at).impure || "moved onto its own workspace";
     }
 
     async dragSpec(s, win) {
@@ -1458,14 +1946,14 @@ class Scenario {
             this.replica.swayEvent("binding", { change: "run", binding: { command: "nop dwindle toggle" } });
             this.prev = await this.step("dwindle off");
         }
-        for (let i = 0; i < steps.length && this.prev !== null; i++) {
+        for (let i = 0; i < steps.length && this.prev !== null && !this.sway.exited(); i++) {
             const s = steps[i];
             this.note(`-- step ${i + 1}: ${JSON.stringify(s)}`);
             const before = this.prev;
             this.actionAt = now();
             if (s.k === "tabs")
                 this.pendingTabs = true;
-            if ((s.k === "resize" || s.k === "key") && this.prev) {
+            if ((s.k === "resize" || s.k === "key" || s.k === "rapid") && this.prev) {
                 const vis = this.visibleWs(this.prev);
                 for (const w of wsNodes(this.prev))
                     if (vis.has(w.id))
@@ -1475,12 +1963,14 @@ class Scenario {
             this.prev = await this.step(`after ${s.k} #${i + 1}`);
             if (this.prev && s.k === "tabs")
                 this.checkTabs(before, this.prev);
+            if (this.prev && s.k === "dwToggle")
+                this.markImpure(this.prev, "dwToggle");
         }
         await this.finishRun();
     }
 
     actionTable(dual) {
-        const M = this.modelMode;
+        const M = !this.racy;
         const T = [
             ["open", M ? 24 : 18],
             ["dialog", 4],
@@ -1493,7 +1983,8 @@ class Scenario {
             ["float", 4],
             ["fs", 4],
             ["scratch", 3],
-            ["tabs", 4],
+            ["tabs", 6],
+            ["cycle", 6],
             ["dwToggle", M ? 1 : 2],
             ["moveDir", M ? 1 : 5],
             ["resize", M ? 1 : 3],
@@ -1566,6 +2057,8 @@ class Scenario {
         case "moveWs": {
             const x = r();
             const k = 1 + Math.floor(r() * 4);
+            if (x < 0.75)
+                this.sameWsMove(null, String(k));
             if (x < 0.5)
                 await this.cmd(`move container to workspace number ${k}`);
             else if (x < 0.75)
@@ -1584,26 +2077,30 @@ class Scenario {
             await this.cmd("floating toggle");
             break;
         case "fs":
-            await this.cmd(!this.modelMode && r() < 0.15 ? "fullscreen toggle global" : "fullscreen toggle");
+            await this.cmd(this.racy && r() < 0.15 ? "fullscreen toggle global" : "fullscreen toggle");
             break;
         case "scratch":
             await this.cmd(r() < 0.5 ? "move scratchpad" : "scratchpad show");
             break;
         case "tabs":
-            this.note("binding nop dwindle tabs");
-            this.replica.swayEvent("binding", { change: "run", binding: { command: "nop dwindle tabs" } });
+            this.press("nop dwindle tabs");
+            break;
+        case "cycle":
+            this.press(`nop dwindle ${r() < 0.5 ? "focus" : "swap"} ${r() < 0.5 ? "next" : "prev"}`);
             break;
         case "dwToggle":
-            this.note("binding nop dwindle toggle");
-            this.replica.swayEvent("binding", { change: "run", binding: { command: "nop dwindle toggle" } });
+            this.press("nop dwindle toggle");
             break;
         case "moveDir":
+            this.handledAt = now();
             await this.cmd(`move ${this.pick(dirs)}`);
             break;
         case "resize":
+            this.handledAt = now();
             await this.cmd(`resize ${r() < 0.5 ? "grow" : "shrink"} ${r() < 0.5 ? "width" : "height"} 40 px`);
             break;
         case "layoutSplit":
+            this.modelFlip();
             await this.cmd("layout toggle split");
             break;
         case "focusParentOpen":
@@ -1622,27 +2119,30 @@ class Scenario {
 
     async run() {
         const r = this.rng;
-        this.modelMode = r() < 0.45;
+        // "chaos" scenarios do not wait between actions, so they get the structural checks only.
+        this.racy = r() >= 0.45;
+        this.modelMode = !this.racy;
         let x = r() * OUTPUTS.reduce((s, o) => s + o.weight, 0);
         this.out = OUTPUTS.find(o => (x -= o.weight) < 0) || OUTPUTS[0];
         const steps = 5 + Math.floor(r() * 36);
-        this.note(`scenario ${this.index} seed ${this.seed} mode ${this.modelMode ? "model" : "chaos"} output ${this.out.name} steps ${steps}`);
+        this.note(`scenario ${this.index} seed ${this.seed} mode ${this.racy ? "chaos" : "model"} output ${this.out.name} steps ${steps}`);
         await this.begin();
         const dual = this.out.outs.length > 1;
         const table = this.actionTable(dual);
-        for (let i = 0; i < steps && this.prev !== null; i++) {
+        for (let i = 0; i < steps && this.prev !== null && !this.sway.exited(); i++) {
             const kind = this.choose(table);
             this.note(`-- action ${i + 1}: ${kind}`);
-            const checkTabs = kind === "tabs" && (this.modelMode || r() < 0.5);
+            const checkTabs = kind === "tabs" && (!this.racy || r() < 0.5);
             let before = null;
-            if (checkTabs && !this.modelMode) {
+            if (checkTabs && this.racy) {
                 before = await this.step("before tabs");
                 if (!before)
                     break;
             } else if (checkTabs) {
                 before = this.prev;
             }
-            if (this.modelMode && ["dwToggle", "moveDir", "resize", "layoutSplit", "focusParentOpen"].includes(kind))
+            this.expectFocus = null;
+            if (this.modelMode && ["dwToggle", "moveDir", "resize", "focusParentOpen"].includes(kind))
                 this.markImpure(this.prev, kind);
             // A directional move can cross onto the other output.
             if (this.modelMode && kind === "moveDir" && this.prev) {
@@ -1655,7 +2155,7 @@ class Scenario {
             if (this.modelMode && kind === "tabs")
                 this.pendingTabs = true;
             await this.act(kind, dual);
-            if (this.modelMode || checkTabs || r() < 0.15) {
+            if (!this.racy || checkTabs || r() < 0.15) {
                 const t = await this.step(`after ${kind} #${i + 1}`);
                 if (!t)
                     break;
@@ -1675,7 +2175,7 @@ class Scenario {
         this.sway = await startSway(this.out);
         this.cpu0 = swayCpu(this.sway.proc.pid);
         this.events = await Ipc.connect(this.sway.sock);
-        this.events.onEvent = (type, msg) => this.onSway(type, msg);
+        this.events.onEvent = (type, msg, body) => this.onSway(type, msg, body);
         await this.events.send(2, JSON.stringify(["window", "shutdown"]));
         this.pointer = new Pointer(this.client, this.sway.env);
         await this.pointer.ready;
@@ -1694,6 +2194,10 @@ class Scenario {
     }
 
     async finishRun() {
+        if (this.sway.exited()) {
+            this.swayCrashed();
+            return;
+        }
         if (this.prev !== null && this.actionAt > this.lastJobStart) {
             this.actionAt = 0;
             this.open("normal");
@@ -1717,7 +2221,7 @@ class Scenario {
             return;
         if (v.length && p.layout === "tabbed" && v.every(i => i.parent === p)) {
             Object.assign(w, { kind: "tabbed", list: v.map(i => i.n.id), root: null, impure: "" });
-        } else if (w.kind === "tabbed" && !w.impure && w.list.length >= 2) {
+        } else if (w.kind === "tabbed" && !w.impure && w.list.length >= 1) {
             const ws = f.n.type === "workspace" ? f.n : f.ws;
             const rect = { w: ws.rect.width, h: ws.rect.height };
             let root = { id: w.list[0] };
@@ -1742,6 +2246,7 @@ class Scenario {
         } else if (this.replica) {
             this.replica.dead = true;
             clearTimeout(this.replica.timer);
+            clearTimeout(this.replica.fitTimer);
             if (this.replica.sock)
                 this.replica.sock.destroy();
         }
@@ -1758,9 +2263,9 @@ class Scenario {
 }
 
 async function runWorker() {
-    const L = loadLogic();
     const client = process.env.DW_CLIENT;
     const opts = JSON.parse(process.env.DW_OPTS);
+    const L = loadLogic(opts);
     process.on("message", async m => {
         if (m.cmd === "stop")
             process.exit(0);
@@ -1777,7 +2282,7 @@ async function runWorker() {
         try {
             await sc.close();
         } catch (e) {}
-        const res = { index: m.index, seed: m.seed, mode: sc.modelMode ? "model" : "chaos", output: sc.out ? sc.out.name : "?", template: sc.template || "", failures: sc.failures, benign: sc.benign, drags: sc.drags, silentChecks: sc.silentChecks, latency: sc.latency, logicMs: sc.logicMs, jobs: sc.jobs, swayCpu: sc.swayCpu || 0 };
+        const res = { index: m.index, seed: m.seed, mode: sc.racy ? "chaos" : "model", compared: sc.compared, adopted: sc.adopted, output: sc.out ? sc.out.name : "?", template: sc.template || "", failures: sc.failures, benign: sc.benign, drags: sc.drags, silentChecks: sc.silentChecks, latency: sc.latency, logicMs: sc.logicMs, jobs: sc.jobs, swayCpu: sc.swayCpu || 0 };
         if (sc.failures.length)
             res.log = sc.log;
         process.send(res);
@@ -1791,55 +2296,119 @@ function childCpu() {
     return (+parts[13] + +parts[14]) / 100;
 }
 
-// Opens and closes windows one at a time with each transport and reports what one window costs.
+function procCpu(pid) {
+    try {
+        const f = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+        const parts = f.slice(f.lastIndexOf(")") + 2).split(" ");
+        return (+parts[11] + +parts[12]) / 100;
+    } catch (e) {
+        return 0;
+    }
+}
+
+// Quiet per-event cost: a workspace with --bench N windows (default 4); each round opens a window,
+// moves focus and closes the window again, waiting for the plugin after every step.
 async function runBench(opts, client) {
-    const L = loadLogic();
-    const out = {};
-    for (const transport of ["swaymsg", "socket"]) {
-        const sc = new Scenario(L, client, 0, 1, Object.assign({}, opts, { transport }));
-        sc.modelMode = false;
-        sc.out = OUTPUTS[0];
-        sc.sway = await startSway(sc.out);
-        sc.events = await Ipc.connect(sc.sway.sock);
-        sc.events.onEvent = (type, msg) => sc.onSway(type, msg);
-        await sc.events.send(2, JSON.stringify(["window", "shutdown"]));
+    const L = loadLogic(opts);
+    const sc = new Scenario(L, client, 0, 1, opts);
+    sc.modelMode = false;
+    sc.out = OUTPUTS[0];
+    sc.sway = await startSway(sc.out);
+    sc.events = await Ipc.connect(sc.sway.sock);
+    sc.events.onEvent = (type, msg, body) => {
+        if (type === 3 && msg && sc.benchEvent)
+            sc.benchEvent(msg);
+        sc.onSway(type, msg, body);
+    };
+    await sc.events.send(2, JSON.stringify(["window", "shutdown"]));
+    const qml = opts.plugin === "qml";
+    if (qml) {
+        sc.pointer = new Pointer(client, sc.sway.env);
+        await sc.pointer.ready;
+        sc.replica = new QmlPlugin(sc);
+        await sc.replica.start();
+    } else {
         sc.replica = new Replica(L, sc);
         await sc.replica.connect();
-        await sc.settle("bench start");
-        const res = {};
-        for (const phase of ["open", "close"]) {
-            const jobs0 = sc.latency.length;
-            const s0 = swayCpu(sc.sway.proc.pid), c0 = process.cpuUsage(), k0 = childCpu(), t0 = now();
-            const lat = [];
-            for (let i = 0; i < opts.bench; i++) {
-                if (phase === "open") {
-                    sc.open("normal");
-                } else {
-                    const c = sc.alive()[0];
-                    c.closing = true;
-                    c.proc.kill("SIGTERM");
-                }
-                await sc.settle("bench");
-                lat.push(sc.lastJobEnd - (phase === "open" ? sc.lastNewAt : sc.lastCloseAt));
-            }
-            const c1 = process.cpuUsage(c0);
-            res[phase] = {
-                eventToDoneMs: { p50: +pct(lat, 0.5).toFixed(2), p95: +pct(lat, 0.95).toFixed(2) },
-                jobMs: { p50: pct(sc.latency.slice(jobs0), 0.5), p95: pct(sc.latency.slice(jobs0), 0.95) },
-                jobsPerWindow: +((sc.latency.length - jobs0) / opts.bench).toFixed(2),
-                swayCpuMsPerWindow: +((swayCpu(sc.sway.proc.pid) - s0) * 1000 / opts.bench).toFixed(2),
-                pluginCpuMsPerWindow: +(((c1.user + c1.system) / 1000 + (childCpu() - k0) * 1000) / opts.bench).toFixed(2),
-                wallMs: +(now() - t0).toFixed(0),
-            };
-        }
-        res.treeReadMsP50 = +pct(sc.fetchMs || [], 0.5).toFixed(2);
-        res.commandMsP50 = +pct(sc.cmdMs || [], 0.5).toFixed(2);
-        res.logicMsPerJob = +(sc.logicMs / Math.max(1, sc.jobs)).toFixed(3);
-        out[transport] = res;
-        sc.failures.length && (out[transport].failures = sc.failures);
-        await sc.close();
+        sc.replica.enqueue({ kind: "tidy" });
     }
-    console.log(JSON.stringify(out, null, 1));
+    const base = opts.bench > 1 ? opts.bench : 4;
+    for (let i = 0; i < base; i++) {
+        sc.open("normal");
+        await sc.settle("bench base");
+    }
+    const rounds = opts.rounds || 200;
+    sc.jobLog = [];
+    let events = 0, placed = [];
+    const newAt = new Map();
+    sc.benchEvent = m => {
+        events++;
+        const id = m.container && m.container.id;
+        if (m.change === "new")
+            newAt.set(id, now());
+        else if (m.change === "move" && newAt.has(id)) {
+            placed.push(now() - newAt.get(id));
+            newAt.delete(id);
+        }
+    };
+    const qsPid = qml ? sc.replica.proc.pid : 0;
+    const s0 = swayCpu(sc.sway.proc.pid), q0 = qml ? procCpu(qsPid) : 0, t0 = now();
+    const openDone = [], closeDone = [];
+    for (let i = 0; i < rounds; i++) {
+        sc.open("normal");
+        await sc.settle("bench open");
+        if (!qml)
+            openDone.push(sc.lastJobEnd - sc.lastNewAt);
+        const others = sc.alive().filter(c => c.kind === "normal");
+        await sc.cmd(`[con_id=${others[i % base].conId}] focus`);
+        await sc.settle("bench focus");
+        const c = others[others.length - 1];
+        c.closing = true;
+        c.proc.kill("SIGTERM");
+        await sc.settle("bench close");
+        if (!qml)
+            closeDone.push(sc.lastJobEnd - sc.lastCloseAt);
+    }
+    const wall = now() - t0;
+    const r2 = v => +v.toFixed(3);
+    const stats = (jobs, f) => {
+        const a = jobs.map(f);
+        return { p50: r2(pct(a, 0.5)), p95: r2(pct(a, 0.95)) };
+    };
+    const byKind = {};
+    for (const kind of ["place", "tidy"]) {
+        const j = sc.jobLog.filter(x => x.kind === kind);
+        byKind[kind] = {
+            jobs: j.length,
+            totalMs: stats(j, x => x.t2 - x.t0),
+            treeReadMs: stats(j, x => x.t1 - x.t0),
+            logicMs: stats(j, x => x.logicMs || 0),
+            commandMs: stats(j.filter(x => x.cmds && x.cmds.length), x => x.t2 - x.t1 - (x.logicMs || 0)),
+            withCommands: j.filter(x => x.cmds && x.cmds.length).length,
+        };
+    }
+    const res = {
+        plugin: qml ? "qml" : "logic over socket",
+        logic: pluginDir(opts),
+        windows: base + 1,
+        rounds,
+        perEventMs: stats(sc.jobLog, x => x.t2 - x.t0),
+        logicMs: stats(sc.jobLog, x => x.logicMs || 0),
+        jobsPerRound: r2(sc.jobLog.length / rounds),
+        windowEventsPerRound: r2(events / rounds),
+        byKind,
+        newToPlacedMs: { p50: r2(pct(placed, 0.5)), p95: r2(pct(placed, 0.95)) },
+        openEventToDoneMs: { p50: r2(pct(openDone, 0.5)), p95: r2(pct(openDone, 0.95)) },
+        closeEventToDoneMs: { p50: r2(pct(closeDone, 0.5)), p95: r2(pct(closeDone, 0.95)) },
+        swayCpuMsPerRound: r2((swayCpu(sc.sway.proc.pid) - s0) * 1000 / rounds),
+        wallMs: Math.round(wall),
+    };
+    if (qml)
+        res.quickshellCpuMsPerRound = r2((procCpu(qsPid) - q0) * 1000 / rounds);
+    if (sc.failures.length)
+        res.failures = sc.failures;
+    await sc.close();
+    console.log(JSON.stringify(res, null, 1));
 }
 
 function pct(a, p) {
@@ -1860,7 +2429,7 @@ async function runMain(opts) {
     const seeds = opts.seeds || Array.from({ length: opts.scenarios }, (_, i) => scenarioSeed(opts.seed, i));
     const total = seeds.length;
     const jobs = Math.min(opts.jobs, total);
-    let next = 0, done = 0, failed = 0, benign = 0, drags = 0, silent = 0;
+    let next = 0, done = 0, failed = 0, benign = 0, drags = 0, silent = 0, compared = 0, adopted = 0;
     const lat = [], byType = new Map(), byTemplate = new Map(), byOutput = new Map(), byMode = new Map(), failedSeeds = [];
     let logicMs = 0, jobCount = 0, swayCpu = 0;
     const t0 = Date.now();
@@ -1877,7 +2446,7 @@ async function runMain(opts) {
             }
             const i = next++;
             w.current = i;
-            w.send({ cmd: "run", index: i, seed: seeds[i] });
+            w.send({ cmd: "run", index: opts.seeds ? opts.index + i : i, seed: seeds[i] });
         };
         for (let k = 0; k < jobs; k++) {
             const w = fork(fileURLToPath(import.meta.url), ["--worker"], { env: Object.assign({}, process.env, { DW_CLIENT: client, DW_OPTS: JSON.stringify(opts) }) });
@@ -1889,6 +2458,8 @@ async function runMain(opts) {
                 done++;
                 benign += m.benign;
                 drags += m.drags;
+                compared += m.compared || 0;
+                adopted += m.adopted || 0;
                 silent += m.silentChecks;
                 for (const l of m.latency)
                     lat.push(l);
@@ -1951,6 +2522,8 @@ async function runMain(opts) {
         modes: Object.fromEntries(byMode),
         raceErrorsRecovered: benign,
         mouseDrags: drags,
+        modelComparisons: compared,
+        modelAdoptions: adopted,
         checksAfterSilentChanges: silent,
         transport: opts.plugin === "qml" ? "qml" : opts.transport,
         jobs: jobCount,

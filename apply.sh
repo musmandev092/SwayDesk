@@ -297,11 +297,12 @@ EOF
     link home/.config/dms/plugins/OpenHere .config/dms/plugins/OpenHere
     link home/.config/dms/plugins/Switcher .config/dms/plugins/Switcher
     link home/.config/dms/plugins/Dwindle .config/dms/plugins/Dwindle
+    link home/.config/dms/plugins/SwayMode .config/dms/plugins/SwayMode
     link home/.config/dms/patches .config/dms/patches
     link home/.local/bin/swaydesk-dms .local/bin/swaydesk-dms
 
     local ps="$HOME/.config/dms/plugin_settings.json" psr=0 pl
-    for pl in openHere:"Open Here" switcher:"Window Switcher" dwindle:"Dwindle Tiling"; do
+    for pl in openHere:"Open Here" switcher:"Window Switcher" dwindle:"Dwindle Tiling" swayMode:"Sway Mode Indicator"; do
         psr=0
         python3 -I - "$ps" "${pl%%:*}" 2>/dev/null <<'PYEOF' || psr=$?
 import json, os, sys
