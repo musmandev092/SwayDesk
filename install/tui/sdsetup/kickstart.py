@@ -100,7 +100,8 @@ def keyboard_line(config):
 
 
 def boot_args(config, env):
-    args = ["fbcon=font:TER16x32"]
+    # rhgb quiet: the graphical boot screen (firmware logo) with the disk password box; VMs keep text on serial.
+    args = ["fbcon=font:TER16x32"] if env.get("vm") else ["rhgb", "quiet", "fbcon=font:TER16x32"]
     if wants_nvidia(config, env):
         args.append(NVIDIA_ARGS)
     if env.get("vm"):

@@ -195,7 +195,7 @@ class Probe:
         key = f"inspect:{p['name']}"
         if key in self._cache:
             return self._cache[key]
-        mnt = "/tmp/swaydesk/inspect"
+        mnt = "/tmp/swaydesk-inspect"
         os.makedirs(mnt, exist_ok=True)
         opts = "ro,noexec,nosuid,nodev"
         dev = f"/dev/{p['name']}"

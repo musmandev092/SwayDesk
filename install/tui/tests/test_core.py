@@ -145,6 +145,14 @@ class ValidateTest(unittest.TestCase):
         self.assertEqual(second["esp"], "sda2")
         self.assertFalse(second["windows"])
 
+    def test_graphical_boot_on_hardware(self):
+        c, s, p = config("dualboot", "dualboot")
+        self.assertTrue(kickstart.boot_args(c, env(p)).startswith("rhgb quiet "))
+        vc, vs, vp = config("vm")
+        args = kickstart.boot_args(vc, env(vp))
+        self.assertNotIn("rhgb", args)
+        self.assertIn("console=ttyS0", args)
+
     def test_firmware_windows_entries(self):
         text = ("BootCurrent: 0001\nBoot0000* Windows Boot Manager\tHD(1,GPT,0B3C1D2E-1111-2222-3333-444455556666,0x800,0x32000)"
                 "/File(\\EFI\\Microsoft\\Boot\\bootmgfw.efi)\nBoot0001* Fedora\tHD(1,GPT,aaaaaaaa-1111-2222-3333-444455556666,0x800,0x32000)"
