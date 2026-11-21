@@ -732,12 +732,13 @@ Scope {
         [/nop switcher open overview prev/, "All workspaces (backwards)"],
         [/nop switcher open overview/, "All workspaces"],
         [/nop switcher open keys/, "This shortcut list"],
-        [/nop dwindle tabs/, "Tabs on / off"],
-        [/nop dwindle toggle/, "Dwindle on / off (workspace)"],
-        [/nop dwindle focus prev/, "Focus previous window"],
-        [/nop dwindle focus next/, "Focus next window"],
-        [/nop dwindle swap prev/, "Swap with previous window"],
-        [/nop dwindle swap next/, "Swap with next window"],
+        [/nop tile monocle/, "Tabs on / off"],
+        [/nop tile retile/, "Re-tile (back to automatic)"],
+        [/nop tile zoom/, "Make master window"],
+        [/nop tile focus prev/, "Focus previous window"],
+        [/nop tile focus next/, "Focus next window"],
+        [/nop tile swap prev/, "Move window back"],
+        [/nop tile swap next/, "Move window forward"],
         [/^exec nautilus/, "Files"],
         [/^exec brave-origin/, "Browser"],
         [/^exec dms ipc call spotlight toggle$/, "App launcher"],
@@ -900,10 +901,10 @@ Scope {
             Qt.callLater(() => root.open(sw[1], sw[2] || "", false));
             return;
         }
-        // A nop bind only reaches its plugin as a key press, so these go through the plugin's IPC.
-        const dw = /nop dwindle (tabs|toggle|focus next|focus prev|swap next|swap prev)/.exec(row.cmd);
-        if (dw) {
-            Quickshell.execDetached(["sh", "-c", 'sleep 0.25; dms ipc call dwindle action "$1" >/dev/null 2>&1', "sh", dw[1].replace(" ", "-")]);
+        // A nop bind only reaches the tiler as a key press, so these go to it as a Sway tick.
+        const tl = /nop tile (retile|monocle|zoom|focus next|focus prev|swap next|swap prev)/.exec(row.cmd);
+        if (tl) {
+            Quickshell.execDetached(["sh", "-c", 'sleep 0.25; swaymsg -t send_tick "tile $1" >/dev/null 2>&1', "sh", tl[1]]);
             return;
         }
         Quickshell.execDetached(["sh", "-c", 'sleep 0.25; swaymsg "$1" >/dev/null 2>&1', "sh", row.cmd]);

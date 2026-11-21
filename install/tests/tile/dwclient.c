@@ -1,4 +1,4 @@
-// Minimal xdg-shell client for the Dwindle stress test.
+// Minimal xdg-shell client for the tiling stress test.
 // Usage: dwclient APP_ID TITLE [fixed]. "fixed" sets min = max size, which Sway floats.
 //        dwclient --pointer: adds a virtual pointer to the seat so "seat - cursor" can drag.
 #define _GNU_SOURCE

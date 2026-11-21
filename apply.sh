@@ -229,6 +229,21 @@ link() {
     done_ "~/$2 -> SwayDesk (linked)"
 }
 
+# Master-stack tiler (src/swaydesk-tile), built into ~/.local/bin when the source is newer.
+build_tile() {
+    local bin="$HOME/.local/bin/swaydesk-tile" src="$HERE/src/swaydesk-tile" tmp
+    if [ -x "$bin" ] && [ "$bin" -nt "$src/main.c" ]; then done_ "swaydesk-tile"; return; fi
+    if ! command -v cc >/dev/null || ! command -v make >/dev/null || ! pkg-config --exists json-c 2>/dev/null; then
+        note "swaydesk-tile not built: needs gcc make json-c-devel"
+        return
+    fi
+    tmp=$(mktemp -d)
+    if cp "$src/main.c" "$src/Makefile" "$tmp/" && make -s -C "$tmp" install PREFIX="$HOME/.local" >/dev/null; then
+        done_ "swaydesk-tile (built)"
+    else note "swaydesk-tile build failed"; fi
+    rm -rf "$tmp"
+}
+
 do_home() {
     say "home"
     link home/.bashrc.d/custom.sh .bashrc.d/custom.sh
@@ -296,13 +311,17 @@ EOF
     link home/.local/bin/open-here-toolbox .local/bin/open-here-toolbox
     link home/.config/dms/plugins/OpenHere .config/dms/plugins/OpenHere
     link home/.config/dms/plugins/Switcher .config/dms/plugins/Switcher
-    link home/.config/dms/plugins/Dwindle .config/dms/plugins/Dwindle
+    if [ -L "$HOME/.config/dms/plugins/Dwindle" ]; then
+        rm -f "$HOME/.config/dms/plugins/Dwindle"
+        dms ipc call plugins disable dwindle >/dev/null 2>&1 || true
+        done_ "Dwindle plugin removed (replaced by swaydesk-tile)"
+    fi
     link home/.config/dms/plugins/SwayMode .config/dms/plugins/SwayMode
     link home/.config/dms/patches .config/dms/patches
     link home/.local/bin/swaydesk-dms .local/bin/swaydesk-dms
 
     local ps="$HOME/.config/dms/plugin_settings.json" psr=0 pl
-    for pl in openHere:"Open Here" switcher:"Window Switcher" dwindle:"Dwindle Tiling" swayMode:"Sway Mode Indicator"; do
+    for pl in openHere:"Open Here" switcher:"Window Switcher" swayMode:"Sway Mode Indicator"; do
         psr=0
         python3 -I - "$ps" "${pl%%:*}" 2>/dev/null <<'PYEOF' || psr=$?
 import json, os, sys
@@ -320,6 +339,7 @@ PYEOF
         fi
     done
 
+    build_tile
     link home/.local/bin/sway-keys .local/bin/sway-keys
     link home/.local/bin/ptyxis-e .local/bin/ptyxis-e
     link home/.local/bin/sway-colors-apply .local/bin/sway-colors-apply

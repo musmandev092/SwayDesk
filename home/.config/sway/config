@@ -82,7 +82,7 @@ set $menu dms ipc call spotlight toggle
 #
 # Moving around:
 #
-    # Move focus with the arrows (Super+A / Super+D step through windows, see 93-dwindle.conf)
+    # Move focus with the arrows (Super+A / Super+D step through windows, see 93-tile.conf)
     bindsym $mod+Left focus left
     bindsym $mod+Down focus down
     bindsym $mod+Up focus up
@@ -123,7 +123,7 @@ set $menu dms ipc call spotlight toggle
 #
 # Layout stuff:
 #
-    # Splits are automatic (Dwindle); tabs and dwindle keys are in config.d/93-dwindle.conf
+    # Tiling is automatic (master-stack); its keys are in config.d/93-tile.conf
 
     # Make the current focus fullscreen
     bindsym $mod+f fullscreen
