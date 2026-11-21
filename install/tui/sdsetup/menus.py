@@ -1,5 +1,5 @@
 from . import data, kickstart, model, summary as S, validate as V
-from .probe import GIB, human
+from .probe import GIB, ROLE_TEXT, human
 from .secret import Secret, hash_password, strength, strength_hint, WEAK
 from .tui import dialogs as D
 from .tui.menu import Done, Item, Menu, back, blank
@@ -403,7 +403,7 @@ class Setup:
     def disk_rows(self):
         rows = []
         for d in self.p.disks():
-            tag = "WINDOWS" if d["windows"] else ""
+            tag = "WINDOWS" if d["windows"] else "WINDOWS BOOT" if d["windows_boot"] else ""
             rows.append({"cols": [d["name"], d["model"] or "-", human(d["size"]), human(d["free"]) if d["free"] else "0",
                                   d["contents"] + (f"  {tag}" if tag else "")], "value": d["name"],
                          "attr": "warn" if d["windows"] else None})
@@ -415,7 +415,8 @@ class Setup:
             return []
         out = [(f"Partitions on {name}  ({d['pttype'] or 'no table'})", "bold")]
         for p in d["parts"]:
-            out.append(f"{p['name']:<12} {human(p['size']):>9}  {p['fstype'] or '-':<12} {p['partlabel'] or p['label']}")
+            what = ROLE_TEXT.get(p.get("role"), "")
+            out.append(f"{p['name']:<12} {human(p['size']):>9}  {p['fstype'] or '-':<10} {what:<18} {p['label'] or p['partlabel']}")
         if not d["parts"]:
             out.append("empty")
         return out

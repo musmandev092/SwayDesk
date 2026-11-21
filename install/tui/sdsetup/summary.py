@@ -1,5 +1,5 @@
 from . import data, kickstart, validate
-from .probe import GIB, human
+from .probe import GIB, ROLE_TEXT, human
 
 SWAP = {
     "zram": "zram (min of RAM and 8 GiB)",
@@ -82,11 +82,14 @@ def disk_plan(c, probe, ram=0):
         size = f"{c.disk.size_gib} GiB" if c.disk.size_gib else f"all free ({d['free'] // GIB} GiB)"
         for p in d["parts"]:
             tag = "EFI, reused" if p["name"] == d["esp"] else "kept"
-            out.append(f"{p['name']:<10} {human(p['size']):>8}  {p['fstype'] or '-':<7} {tag}")
+            what = ROLE_TEXT.get(p.get("role"), p["fstype"] or "-")
+            out.append(f"{p['name']:<10} {human(p['size']):>8}  {what:<18} {tag}")
         out += [f"new /boot  2 GiB ext4", f"new Linux  {size}  {enc}", f"           {c.disk.fs}" +
                 (" root + home" if c.disk.fs == "btrfs" else " /"), "", "Other systems are never changed."]
         if d["bitlocker"]:
             out.append(("! Keep the BitLocker recovery key ready", "warn"))
+        if d["hibernated"]:
+            out.append(("! Turn off Fast Startup in Windows first", "warn"))
     out.append("")
     out.append(f"swap: {SWAP[c.swap]}" + (f", {human(zram_size(c, ram))}" if c.swap != "none" and ram else ""))
     return out

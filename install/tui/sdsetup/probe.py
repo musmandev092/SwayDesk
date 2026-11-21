@@ -6,8 +6,13 @@ import subprocess
 import time
 import uuid
 
-ESP_TYPE = "c12a7328-f81f-11d2-ba4b-00a0c93ec93e"
+ESP_TYPE = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
 MSR_TYPE = "e3c9e316-0b5c-4db8-817d-f92df00215ae"
+RECOVERY_TYPE = "de94bba4-06d1-4d40-a16a-bfd50179d6ac"
+ROLE_TEXT = {
+    "windows": "Windows system", "bitlocker": "BitLocker", "data": "NTFS data", "ntfs": "NTFS (unreadable)",
+    "esp-windows": "Windows boot", "esp": "EFI", "recovery": "Windows recovery", "msr": "Microsoft reserved",
+}
 GIB = 1024 ** 3
 MIB = 1024 ** 2
 
@@ -34,24 +39,70 @@ def human(n):
     return f"{n} B"
 
 
+def role(p):
+    """What a partition is, from its type and what was found inside it."""
+    pt, fs = (p.get("parttype") or "").lower(), (p.get("fstype") or "").lower()
+    if pt == ESP_TYPE:
+        return "esp-windows" if p.get("winboot") or p.get("firmware") else "esp"
+    if pt == MSR_TYPE:
+        return "msr"
+    if pt == RECOVERY_TYPE:
+        return "recovery"
+    if fs == "bitlocker":
+        return "bitlocker"
+    if fs == "ntfs":
+        return "windows" if p.get("system") else "ntfs" if p.get("unreadable") else "data"
+    return ""
+
+
 def classify(disk):
+    """Windows needs evidence (a Windows folder, or BitLocker beside its boot manager or recovery); NTFS alone is data."""
     parts = disk.get("parts", [])
-    fstypes = [p.get("fstype") or "" for p in parts]
-    disk["windows"] = any(
-        f.lower() in ("ntfs", "bitlocker") or (p.get("parttype") or "").lower() == MSR_TYPE
-        or "microsoft" in (p.get("partlabel") or "").lower()
-        for p, f in zip(parts, fstypes))
-    disk["bitlocker"] = any(f.lower() == "bitlocker" for f in fstypes)
-    esp = [p for p in parts if (p.get("parttype") or "").lower() == ESP_TYPE]
+    for p in parts:
+        p["role"] = role(p)
+    roles = [p["role"] for p in parts]
+    disk["windows_boot"] = "esp-windows" in roles
+    disk["bitlocker"] = "bitlocker" in roles
+    disk["windows"] = "windows" in roles or (disk["bitlocker"] and (disk["windows_boot"] or "recovery" in roles)) \
+        or ("ntfs" in roles and disk["windows_boot"])
+    disk["hibernated"] = any(p.get("hiberfil") for p in parts if p["role"] == "windows")
+    esp = sorted((p for p in parts if p["role"] in ("esp", "esp-windows")), key=lambda p: p["role"] != "esp-windows")
     disk["esp"] = esp[0]["name"] if esp else ""
     disk["esp_size"] = esp[0]["size"] if esp else 0
     disk["esp_fstype"] = esp[0].get("fstype") or "" if esp else ""
     seen = []
-    for f in fstypes:
-        if f and f not in seen:
-            seen.append(f)
-    disk["contents"] = " ".join(seen) or "empty"
+    for p in parts:
+        r = p["role"]
+        text = ROLE_TEXT.get(r, p.get("fstype") or "") if r != "msr" else ""
+        if r == "data" and p.get("label"):
+            text += f" '{p['label']}'"
+        if text and text not in seen:
+            seen.append(text)
+    disk["contents"] = ", ".join(seen) or "empty"
     return disk
+
+
+def _has(root, *names):
+    """Case-insensitive path lookup (Windows file names)."""
+    cur = root
+    for n in names:
+        try:
+            hit = next((e for e in os.listdir(cur) if e.lower() == n.lower()), None)
+        except OSError:
+            return False
+        if hit is None:
+            return False
+        cur = os.path.join(cur, hit)
+    return True
+
+
+def firmware_windows(efibootmgr_text):
+    """Partition UUIDs of the EFI partitions that firmware boot entries named Windows point at."""
+    out = set()
+    for m in re.finditer(r"^Boot[0-9A-Fa-f]{4}\*?\s+([^\t\n]*?)\s+HD\(\d+,GPT,([0-9a-fA-F-]{36})", efibootmgr_text, re.M):
+        if "windows" in m.group(1).lower():
+            out.add(m.group(2).lower())
+    return out
 
 
 class Probe:
@@ -105,7 +156,8 @@ class Probe:
         if "disks" in self._cache and not refresh:
             return self._cache["disks"]
         rc, out = run(["lsblk", "-J", "-b", "-o",
-                       "NAME,PATH,TYPE,SIZE,MODEL,TRAN,RM,RO,HOTPLUG,FSTYPE,PARTTYPE,PARTLABEL,LABEL,PTTYPE"])
+                       "NAME,PATH,TYPE,SIZE,MODEL,TRAN,RM,RO,HOTPLUG,FSTYPE,PARTTYPE,PARTLABEL,LABEL,PTTYPE,PARTUUID"])
+        fw = firmware_windows(run(["efibootmgr", "-v"], 10)[1]) if self.uefi else set()
         disks = []
         try:
             devices = json.loads(out).get("blockdevices", []) if rc == 0 else []
@@ -121,8 +173,11 @@ class Probe:
             parts = [{
                 "name": c["name"], "size": int(c.get("size") or 0), "fstype": c.get("fstype") or "",
                 "parttype": c.get("parttype") or "", "partlabel": c.get("partlabel") or "",
-                "label": c.get("label") or "",
+                "label": c.get("label") or "", "partuuid": (c.get("partuuid") or "").lower(),
             } for c in d.get("children", []) if c.get("type") == "part"]
+            for p in parts:
+                p.update(self._inspect(p))
+                p["firmware"] = bool(p["partuuid"]) and p["partuuid"] in fw
             disk = {
                 "name": d["name"], "path": d.get("path") or f"/dev/{d['name']}", "size": int(d["size"]),
                 "model": (d.get("model") or "").strip(), "tran": d.get("tran") or "",
@@ -131,6 +186,38 @@ class Probe:
             disks.append(classify(disk))
         self._cache["disks"] = disks
         return disks
+
+    def _inspect(self, p):
+        """Read-only look for the Windows boot manager, a Windows folder and a hibernation file."""
+        pt, fs = p["parttype"].lower(), p["fstype"].lower()
+        if not (pt == ESP_TYPE and fs == "vfat") and fs != "ntfs":
+            return {}
+        key = f"inspect:{p['name']}"
+        if key in self._cache:
+            return self._cache[key]
+        mnt = "/tmp/swaydesk/inspect"
+        os.makedirs(mnt, exist_ok=True)
+        opts = "ro,noexec,nosuid,nodev"
+        dev = f"/dev/{p['name']}"
+        if fs == "vfat":
+            ok = run(["mount", "-t", "vfat", "-o", opts, dev, mnt])[0] == 0
+        else:
+            ok = run(["mount", "-t", "ntfs3", "-o", opts + ",force", dev, mnt])[0] == 0 or \
+                run(["mount", "-t", "ntfs-3g", "-o", opts, dev, mnt])[0] == 0
+        facts = {}
+        if not ok:
+            facts["unreadable"] = True
+        else:
+            try:
+                if fs == "vfat":
+                    facts["winboot"] = _has(mnt, "EFI", "Microsoft", "Boot", "bootmgfw.efi")
+                else:
+                    facts["system"] = _has(mnt, "Windows", "System32", "ntoskrnl.exe")
+                    facts["hiberfil"] = facts["system"] and _has(mnt, "hiberfil.sys")
+            finally:
+                run(["umount", mnt])
+        self._cache[key] = facts
+        return facts
 
     def _free(self, name, size, parts):
         if not parts:

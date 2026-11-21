@@ -9,7 +9,9 @@ import unittest
 
 from helpers import ED25519, config, env, probe
 from sdsetup import answers, data, kickstart, model, validate as V
-from sdsetup.probe import classify, write_wifi_keyfile, _split_nm
+from sdsetup.probe import ESP_TYPE, GIB, MIB, MSR_TYPE, classify, firmware_windows, write_wifi_keyfile, _split_nm
+
+BASIC = "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7"
 from sdsetup.secret import MODERATE, STRONG, WEAK, Secret, hash_password, strength, verify_password
 from sdsetup.ui_text import TextUI
 
@@ -122,6 +124,32 @@ class ValidateTest(unittest.TestCase):
         self.assertTrue(d["windows"])
         self.assertTrue(d["bitlocker"])
         self.assertEqual(d["esp"], "nvme1n1p1")
+
+    def test_ntfs_data_is_not_windows(self):
+        msr = {"name": "sdb1", "size": 16777216, "fstype": "", "parttype": MSR_TYPE, "label": ""}
+        data = {"name": "sdb2", "size": 900 * GIB, "fstype": "ntfs", "parttype": BASIC, "label": "Data"}
+        d = classify({"parts": [dict(msr), dict(data)]})
+        self.assertFalse(d["windows"])
+        self.assertEqual(d["contents"], "NTFS data 'Data'")
+        locked = classify({"parts": [dict(msr), dict(data, fstype="BitLocker")]})
+        self.assertFalse(locked["windows"])
+        self.assertTrue(locked["bitlocker"])
+
+    def test_windows_needs_evidence(self):
+        esp = {"name": "nvme0n1p1", "size": 100 * MIB, "fstype": "vfat", "parttype": ESP_TYPE, "label": ""}
+        c = {"name": "nvme0n1p3", "size": 400 * GIB, "fstype": "ntfs", "parttype": BASIC, "label": "OS"}
+        d = classify({"parts": [dict(esp, winboot=True), dict(c, system=True, hiberfil=True)]})
+        self.assertTrue(d["windows"] and d["windows_boot"] and d["hibernated"])
+        self.assertEqual([p["role"] for p in d["parts"]], ["esp-windows", "windows"])
+        second = classify({"parts": [dict(esp, name="sda1"), dict(esp, name="sda2", firmware=True)]})
+        self.assertEqual(second["esp"], "sda2")
+        self.assertFalse(second["windows"])
+
+    def test_firmware_windows_entries(self):
+        text = ("BootCurrent: 0001\nBoot0000* Windows Boot Manager\tHD(1,GPT,0B3C1D2E-1111-2222-3333-444455556666,0x800,0x32000)"
+                "/File(\\EFI\\Microsoft\\Boot\\bootmgfw.efi)\nBoot0001* Fedora\tHD(1,GPT,aaaaaaaa-1111-2222-3333-444455556666,0x800,0x32000)"
+                "/File(\\EFI\\fedora\\shimx64.efi)\n")
+        self.assertEqual(firmware_windows(text), {"0b3c1d2e-1111-2222-3333-444455556666"})
 
 
 class ModelTest(unittest.TestCase):

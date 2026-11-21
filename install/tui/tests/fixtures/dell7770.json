@@ -12,7 +12,7 @@
     {"name": "nvme0n1", "path": "/dev/nvme0n1", "size": 1024209543168, "model": "Micron MTFDKBA1T0TFH", "tran": "nvme",
      "pttype": "gpt", "free": 1048576,
      "parts": [
-       {"name": "nvme0n1p1", "size": 629145600, "fstype": "vfat", "parttype": "c12a7328-f81f-11d2-ba4b-00a0c93ec93e", "partlabel": "EFI System Partition", "label": ""},
+       {"name": "nvme0n1p1", "size": 629145600, "fstype": "vfat", "parttype": "c12a7328-f81f-11d2-ba4b-00a0c93ec93b", "partlabel": "EFI System Partition", "label": ""},
        {"name": "nvme0n1p2", "size": 2147483648, "fstype": "ext4", "parttype": "0fc63daf-8483-4772-8e79-3d69d8477de4", "partlabel": "", "label": ""},
        {"name": "nvme0n1p3", "size": 1021430022144, "fstype": "crypto_LUKS", "parttype": "0fc63daf-8483-4772-8e79-3d69d8477de4", "partlabel": "", "label": ""}
      ]}

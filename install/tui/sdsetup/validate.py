@@ -213,6 +213,8 @@ def check(config, secrets, probe, online=None):
             missing.append(f"Disk: Linux size {config.disk.size_gib} GiB is more than the free space")
         if d["bitlocker"]:
             warnings.append("BitLocker found: keep the recovery key ready")
+        if d["hibernated"]:
+            warnings.append("Windows Fast Startup or hibernation is on: turn it off in Windows first")
         if not probe.uefi:
             missing.append("Alongside install needs UEFI firmware")
     else:

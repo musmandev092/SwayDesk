@@ -182,7 +182,7 @@ class TextUI:
             return
         self.say("  Disks (USB and removable drives are not listed):")
         for i, x in enumerate(disks, 1):
-            tag = "  !! WINDOWS !!" if x["windows"] else ""
+            tag = "  !! WINDOWS !!" if x["windows"] else "  !! WINDOWS BOOT !!" if x["windows_boot"] else ""
             self.say(f"    {i}) {x['name']}  {x['model'] or '-'}  {human(x['size'])}  free {human(x['free'])}  [{x['contents']}]{tag}")
         names = [x["name"] for x in disks]
         dflt = str(names.index(d.device) + 1) if d.device in names else "1"
